@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "",
+        "limitSymbolsToIncludedHeaders": true
+      },
+      "includePath": [
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/devel/include/**",
+        "/opt/ros/melodic/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/mavros/libmavconn/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/mavros/mavros/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/mavros/mavros_msgs/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/mavros/test_mavros/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/vrx/usv_gazebo_plugins/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/vrx/vrx_gazebo/include/**",
+        "/home/sotiris/ROS_workspaces/ardupilot_ws/src/vrx/wave_gazebo_plugins/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS"
+    }
+  ],
+  "version": 4
+}

@@ -1,0 +1,13 @@
+Header header
+float32[8] errors
+float32[4] cmds
+float32[4] ekf_output
+float32[1] e_m
+float32[1] e_m_dot
+float32[1] u_bc
+float32[1] v_bc
+float64[1] alpha
+float64[1] alpha_des
+float64[1] sigma
+float64[1] sigma_des
+float32 time
