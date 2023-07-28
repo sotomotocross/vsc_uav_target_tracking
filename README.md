@@ -1,1 +1,1 @@
-# vsc_uav_target_tracking
+# Visual Servo control for target tracking using UAVs
