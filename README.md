@@ -41,7 +41,7 @@ $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
 The controller was not developed on a synthetic environment. Due to the presence of the hardware framework it was developed and implemented directly on an octorotor UAV featuring Pixhawk and Ardupilot.
 
-This is the core of diploma thesis [3] and of paper [4] that is accepted and will be presented on IROS 2023.
+This is the core of diploma thesis [3](#3) and of paper [4](#4) that is accepted and will be presented on IROS 2023.
 
 
 ## References
@@ -54,7 +54,7 @@ S. N. Aspragkathos, G. C. Karras, and K. J. Kyriakopoulos, “A Hybrid Model and
 Automation (MED), pp. 375–381, IEEE, 2022, [https://doi.org/10.3390/drones6060146](https://doi.org/10.3390/drones6060146)
 
 <a id="3">[3]</a> 
-E. Ntouros, “Multicopter control using dynamic vision and neuromorphic computing", Athens, October 2022
+E. Ntouros, “Multicopter control using dynamic vision and neuromorphic computing", Athens, October 2022, [https://dspace.lib.ntua.gr/xmlui/bitstream/handle/123456789/56541/thesis.pdf?sequence=1](https://dspace.lib.ntua.gr/xmlui/bitstream/handle/123456789/56541/thesis.pdf?sequence=1)
 
 <a id="4">[4]</a> 
 S. N. Aspragkathos, E. Ntouros, G. C. Karras, B. Linares-Barranco, T. Serrano-Gotarredona and K. J. Kyriakopoulos, “An Event-Based Tracking Control Framework for Multirotor Aerial Vehicles Using a Dynamic Vision Sensor and Neuromorphic Hardware", Accepted on IEEE/RSJ 2023 International Conference on Intelligent Robots and Systems (IROS), IEEE, 2023
