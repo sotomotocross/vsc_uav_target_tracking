@@ -13,7 +13,7 @@ The basic controller of this attempt is an IBVS target tracking scheme incoporat
 ```
 $ rosrun vsc_uav_target_tracking vsc_ibvs_tracking_ekf_est.py
 ```
-This is the core of [[1]](https://ieeexplore.ieee.org/abstract/document/9837275).
+This is the core of [[1]](#1).
 
 ## Partitioned Visual Servo Control strategy
 This is a PVS implementation for the same application considering the decoupling between translational and rotational velocities.
@@ -24,7 +24,7 @@ In this case we managed to extend the target motion state estimation module inco
 ```
 $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
-This is the core of [[2]](https://doi.org/10.3390/drones6060146).
+This is the core of [[2]](#2).
 
 ## Combination of Image moments with Visual Servoing
 This in implementation of IBVS for target tracking utilizing [image moments](10.1109/TRO.2004.829463) as a statistical target descriptor.
@@ -41,7 +41,7 @@ $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
 The controller was not developed on a synthetic environment. Due to the presence of the hardware framework it was developed and implemented directly on an octorotor UAV featuring Pixhawk and Ardupilot.
 
-This is the core of diploma thesis [3](#3) and of paper [4](#4) that is accepted and will be presented on IROS 2023.
+This is the core of diploma thesis [[3]](#3) and of paper [[4]](#4) that is accepted and will be presented on IROS 2023.
 
 
 ## References
