@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 from __future__ import print_function
+
+from numpy.core.fromnumeric import size
+from numpy.core.numeric import ones
 import roslib
-roslib.load_manifest('lfd')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -15,13 +18,13 @@ from geometry_msgs.msg import Twist, Point, Vector3
 from std_msgs.msg import Empty, Int16, Float32, Bool, UInt16MultiArray, UInt32MultiArray, UInt64MultiArray
 from sensor_msgs.msg import Image, Imu
 from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import Twist, Vector3Stamped
+from geometry_msgs.msg import Twist, Vector3Stamped, TwistStamped
 from numpy.linalg import norm
 from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from lfd.msg import VSCdata
+from vsc_uav_target_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
 from operator import itemgetter
 
 
@@ -34,6 +37,9 @@ class image_converter:
         self.pub_error = rospy.Publisher('error', Int16, queue_size=10)
         self.pub_angle = rospy.Publisher('angle', Int16, queue_size=10)
         self.pub_vsc_data = rospy.Publisher("/vsc_data", VSCdata, queue_size=1000)
+        self.pub_ekf_data = rospy.Publisher("/ekf_data", EKFdata, queue_size=1000)
+        self.pub_ibvs_data = rospy.Publisher("/ibvs_data", IBVSdata, queue_size=1000)
+        self.pub_pvs_data = rospy.Publisher("/pvs_data", PVSdata, queue_size=1000)
         self.pub_im = rospy.Publisher('im', Image, queue_size=10)
         self.bridge = CvBridge()
         
@@ -74,6 +80,32 @@ class image_converter:
         self.dt = 0.03
         self.a = 0.2
         self.time = rospy.Time.now().to_sec()
+        self.alpha_des = 0.0
+        self.sigma_des = 14850.0
+        self.alpha = 10.0
+        self.sigma = 10.0
+
+        # Definition of moving average filter parameters
+        self.av_window = []
+        self.cntr = 0
+        self.window_size = 4
+        self.values = []
+        self.sum = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)    
+
+
+    # Function calling a Moving Average Filter
+    def moving_average_filter(self, value):
+        self.values.append(value)
+
+        self.sum = [a + b for a, b in zip(value, self.sum)]
+        
+        if len(self.values) > self.window_size:
+            self.sum = [a - b for a, b in zip(self.sum, self.values.pop(0))]
+            
+        ew_filtered = [float(a)/len(self.values) for a in self.sum]
+        ew_filtered = np.array(ew_filtered).reshape(8,1)
+
+        return ew_filtered
 
     
     # Callback function updating the IMU measurements (rostopic /mavros/imu/data)
@@ -208,28 +240,38 @@ class image_converter:
     
         return mp_pixel
 
-    def quadrotorVSControl(self, Lm, er_pix):
-        
-        forward_gain_Kc = -2.2
-        thrust_gain_Kc = 0.0
-        sway_gain_Kc = 1.0
-        yaw_gain_Kc = -2.5
-        Kc = np.identity(6)
-        Kc[0][0] = thrust_gain_Kc
-        Kc[1][1] = sway_gain_Kc
-        Kc[2][2] = forward_gain_Kc
-        Kc[3][3] = yaw_gain_Kc
-        Kc[4][4] = 0.0
-        Kc[5][5] = 0.0
 
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+1.0*np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1))
-        # print("1st control term: ", -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix)))
-        # print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
-        # print ("Final control law calculation: ", Ucmd)
+    # Function calculating the derivative of the error of the pixels on the image plane
+    def deriv_error_estimation(self, er_pix, er_pix_prev):
+        
+        ew = (er_pix - er_pix_prev)/self.dt 
+
+        return ew
+
+
+    # Function calculating the control law both for target tracking and trajectory planning
+    def quadrotorVSControl_tracking(self, Lm, er_pix, ew, vel_camera):
+        
+        # Kc = 1.2
+        first_gain_Kc = 0.8
+        yaw_gain_Kc = 2.5
+        Kc = np.identity(6)
+        Kc[0][0] = first_gain_Kc
+        Kc[1][1] = first_gain_Kc
+        Kc[2][2] = first_gain_Kc
+        Kc[3][3] = 0.0
+        Kc[4][4] = 0.0
+        Kc[5][5] = yaw_gain_Kc
+
+        Ke = 0.25
+        tracking_error = ew - np.array(np.dot(Lm, vel_camera)).reshape(8,1)
+
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - Ke*np.dot(np.linalg.pinv(Lm), tracking_error)
+        # print("3rd term of control law: ", np.dot(np.linalg.pinv(Lm), ew))
         
         return Ucmd
     
-    
+
     # Detect the line and piloting
     def line_detect(self, cv_image):
         t_vsc = rospy.Time.now().to_sec() - self.time
@@ -239,8 +281,8 @@ class image_converter:
         kernel = np.ones((1, 1), np.uint8)
         mask = cv2.erode(mask, kernel, iterations=3)
         mask = cv2.dilate(mask, kernel, iterations=3)
-        # contours_blk, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        _, contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_blk, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # _, contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         contours_blk.sort(key=cv2.minAreaRect)
 
         
@@ -258,6 +300,13 @@ class image_converter:
                 angle = (90 - angle) * -1
             if w_min > h_min and angle < 0:
                 angle = 90 + angle
+                
+            self.alpha = angle
+            # print("angle = ", self.alpha)
+            # print("angle_des = ", self.alpha_des)
+            self.sigma = cv2.contourArea(contours_blk[0])
+            # print("box area = ", self.sigma)
+            # print("desired box area = ", self.sigma_des) 
 
             # Recreation of the feature box
             if angle >= 0:
@@ -299,9 +348,30 @@ class image_converter:
             # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
             Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
             # print("Error pixel: ", er_pix)
-            UVScmd = self.quadrotorVSControl(Lm, er_pix)
+            # print("Body velocity measurement: ", self.vel_uav)
+            velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)
+            # print("1st velocity camera: ", velocity_camera)
+            # velocity_camera = np.dot(T, self.vel_uav)
+            # print("2nd velocity camera: ", velocity_camera)
+            # print("Transformation to the camera velocity measurement: ", np.dot(T, self.vel_uav))
+            # print("Inverse transformation to the camera velocity measurement: ", np.dot(np.linalg.inv(T), self.vel_uav))
+            # print("velocity_camera: ", velocity_camera)
+            
+            # u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
+            # print("u of centroid: ", u_bc)
+            # v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
+            # print("v of centroid: ", v_bc)
+                
+            ew = self.deriv_error_estimation(er_pix, self.er_pix_prev)
+            # print("ew: ", ew)
+
+            ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
+            # print("ew_filtered: ", ew_filtered)
+
+            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, ew_filtered, velocity_camera)
             UVScmd = np.dot(T, UVScmd)
-            # print("UVScmd is: ", UVScmd)
+            self.er_pix_prev = er_pix
+            # print("er_pix_prev: ", self.er_pix_prev)            
              
             self.uav_vel_body[0] = UVScmd[0]
             self.uav_vel_body[1] = UVScmd[1]
@@ -319,23 +389,24 @@ class image_converter:
             twist.yaw_rate = self.uav_vel_body[3]
             # twist.velocity.x = 0.0
             # twist.velocity.y = 0.0
-            # twist.velocity.z = 0.0
+            twist.velocity.z = 0.0
             # twist.yaw_rate = 0.0
 
-            vsc_msg = VSCdata()
-            vsc_msg.errors = er_pix
-            # print("vsc_msg.errors: ", vsc_msg.errors)
-            vsc_msg.cmds = self.uav_vel_body
-            # print("vsc_msg.cmds: ", vsc_msg.cmds)
-            # vsc_msg.ekf_output = wave_est
-            # print("vsc_msg.ekf_output: ", vsc_msg.ekf_output)
-            # vsc_msg.e_m = e_m
-            # vsc_msg.e_m_dot = e_m_dot
-            # vsc_msg.u_bc = u_bc
-            # vsc_msg.v_bc = v_bc
-            vsc_msg.time = t_vsc
-            self.pub_vsc_data.publish(vsc_msg)
-            self.pub_vel.publish(twist)       
+            ibvs_msg = IBVSdata()
+            ibvs_msg.errors = er_pix
+            ibvs_msg.cmds = self.uav_vel_body
+            print("ibvs_msg.cmds: ", ibvs_msg.cmds)
+            ibvs_msg.time = t_vsc
+            self.pub_ibvs_data.publish(ibvs_msg)
+            
+            pvs_msg = PVSdata()
+            pvs_msg.alpha = self.alpha
+            pvs_msg.alpha_des = self.alpha_des
+            pvs_msg.sigma = self.sigma
+            pvs_msg.sigma_des = self.sigma_des
+            pvs_msg.time = t_vsc
+            self.pub_pvs_data.publish(pvs_msg) 
+            # self.pub_vel.publish(twist)    
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
@@ -350,7 +421,7 @@ class image_converter:
         #         twist.velocity.y = -0.1
         #         #twist.velocity.z = 0
         #         #twist.yaw_rate = 0
-        #         # self.pub_vel.publish(twist)
+        #         self.pub_vel.publish(twist)
         #     if self.line_side == 1:  # line at the left
         #         twist.header.frame_id = 'world'
         #         twist.coordinate_frame = 8
@@ -359,11 +430,11 @@ class image_converter:
         #         twist.velocity.y = 0.1
         #         #twist.velocity.z = 0
         #         #twist.yaw_rate = 0
-        #         # self.pub_vel.publish(twist)
+        #         self.pub_vel.publish(twist)
         
         self.t = self.t+self.dt
   
-  
+
   # Image processing @ 10 FPS
     def callback(self, data):
         try:
@@ -377,10 +448,11 @@ class image_converter:
             cv2.imshow("Image window", cv_image)
             cv2.waitKey(1) & 0xFF
 
+
 def main(args):
     rospy.init_node('image_converter', anonymous=True)
     ic = image_converter()
-    time.sleep(0.03)
+    # time.sleep(0.03)
     rospy.sleep(0.03)
     #ic.cam_down()
     try:

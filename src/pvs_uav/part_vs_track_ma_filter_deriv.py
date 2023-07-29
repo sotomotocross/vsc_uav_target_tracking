@@ -4,7 +4,7 @@ from __future__ import print_function
 from numpy.core.fromnumeric import size
 from numpy.core.numeric import ones
 import roslib
-roslib.load_manifest('coastline_tracking')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -25,7 +25,7 @@ from math import *
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from coastline_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
+from vsc_uav_target_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
 from operator import itemgetter
 
 
@@ -486,13 +486,14 @@ class image_converter:
         lvz = 1.0 # forward gain
         l_om_z = 1.0  # angular z-axes velocity
         # --------------------------------------
-                
+        
+        
         v_z = lvz*log(self.sigma_des/self.sigma)
         # print("v_z = ", v_z)
         omega_z = l_om_z*(self.alpha_des - self.alpha)
         # print("omega_z = ", omega_z)
         
-        # np.linalg.pinv(L_xy)
+        np.linalg.pinv(L_xy)
         
         # PVScmd_1 = er_pix
         # PVScmd_2 = np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)
@@ -535,10 +536,10 @@ class image_converter:
         # --------------------------
         
         # -----  Planning/Tracking -----
-        forward_gain_final = -3.0
+        forward_gain_final = 2.0
         thrust_gain_final = 0.0
-        sway_gain_final = 0.00009
-        yaw_gain_final = 0.009
+        sway_gain_final = 0.0002
+        yaw_gain_final = 0.0005
         final_control_gain = np.identity(6)
         final_control_gain[0][0] = thrust_gain_final
         final_control_gain[1][1] = sway_gain_final
@@ -550,7 +551,6 @@ class image_converter:
         
                         
         PVScmd = np.array([PVScmd[0][0], PVScmd[1][0], v_z, PVScmd[2][0], PVScmd[3][0], omega_z]).reshape(6,1)
-        # print("PVScmd = ", PVScmd)
         PVScmd = np.dot(final_control_gain, PVScmd)
         # print("complete PVScmd = ", PVScmd)
         # print("shape of complete PVScmd = ", PVScmd.shape)
@@ -615,7 +615,7 @@ class image_converter:
             # print("mp_cartesian_v: ", mp_cartesian_v)
             mp_pixel_v = self.pixels_from_cartesian(mp_cartesian_v, self.cu, self.cv, self.ax, self.ay)
             # print("mp_pixel_v: ", mp_pixel_v)
-            
+
             mp_des = np.array([420, 472+self.a*self.t, self.z, 367, 483+self.a*self.t, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
             # print("mp_des: ", mp_des)
             
@@ -632,14 +632,12 @@ class image_converter:
             T[0:3, 0:3] = R_y
             T[3:6, 3:6] = R_y
             T[0:3, 3:6] = np.dot(sst, R_y)
-            # print("From body to camera transformation: ", T) 
-                              
+            # print("From body to camera transformation: ", T)                   
             # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
             Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
             L_xy, L_z, er_pix = self.calculate_hybrid_IM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
+            
             # print("Error pixel: ", er_pix)
-            
-            
             # print("Body velocity measurement: ", self.vel_uav)
             # velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)
             # print("1st velocity camera: ", velocity_camera)
@@ -649,43 +647,19 @@ class image_converter:
             # print("Inverse transformation to the camera velocity measurement: ", np.dot(np.linalg.inv(T), self.vel_uav))
             # print("velocity_camera: ", velocity_camera)
             
-            u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
-            # print("u of centroid: ", u_bc)
-            v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
-            # print("v of centroid: ", v_bc)
-            
             ew = self.deriv_error_estimation(er_pix, self.er_pix_prev)
             # print("ew: ", ew)
-            ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
-            # print("ew_filtered: ", ew_filtered)          
-            ew_filtered_odometry = ew_filtered - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
 
-            e_m = (er_pix[0]+er_pix[2]+er_pix[4]+er_pix[6])/4
-            # print("e_m: ", e_m)
-            e_m_dot = (ew_filtered_odometry[0]+ew_filtered_odometry[2]+ew_filtered_odometry[4]+ew_filtered_odometry[6])/4
-            # print("e_m_dot: ", e_m_dot)
-            self.ekf_estimation(e_m, e_m_dot)
-            wave_est_control_input = self.x_est[1]
-            wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8,1)
-            # print("final estimation: ", wave_estimation_final)
-            
-            # UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_estimation_final)
-            # print("UVScmd = ", UVScmd)
-            PVScmd = self.quadrotor_hybrid_VS_tracking(L_xy, L_z, er_pix, wave_estimation_final)
+            ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
+            # print("ew_filtered: ", ew_filtered)
+
+            PVScmd = self.quadrotor_hybrid_VS_tracking(L_xy, L_z, er_pix, ew_filtered)
             # print("PVScmd = ", PVScmd)
-            # UVScmd = np.dot(np.linalg.inv(T), UVScmd)
-            # print("transformed UVScmd = ", UVScmd)
             PVScmd = np.dot(np.linalg.inv(T), PVScmd)
             # print("transformed PVScmd = ", PVScmd)
             self.er_pix_prev = er_pix
             
             # print("er_pix_prev: ", self.er_pix_prev)    
-            # print("UVScmd: ", UVScmd)        
-             
-            # self.uav_vel_body[0] = UVScmd[0]
-            # self.uav_vel_body[1] = UVScmd[1]
-            # self.uav_vel_body[2] = UVScmd[2]
-            # self.uav_vel_body[3] = UVScmd[5]
             
             self.uav_vel_body[0] = PVScmd[0]
             self.uav_vel_body[1] = PVScmd[1]
@@ -706,15 +680,6 @@ class image_converter:
             # twist.velocity.z = 0.0
             # twist.yaw_rate = 0.0
             
-            ekf_msg = EKFdata()
-            ekf_msg.ekf_output = self.x_est
-            ekf_msg.e_m = e_m
-            ekf_msg.e_m_dot = e_m_dot
-            ekf_msg.u_bc = u_bc
-            ekf_msg.v_bc = v_bc
-            ekf_msg.time = t_vsc
-            self.pub_ekf_data.publish(ekf_msg)
-            
             pvs_msg = PVSdata()
             pvs_msg.errors = er_pix
             pvs_msg.cmds = self.uav_vel_body
@@ -726,7 +691,7 @@ class image_converter:
             pvs_msg.time = t_vsc
             self.pub_pvs_data.publish(pvs_msg)            
             
-            self.pub_vel.publish(twist)         
+            # self.pub_vel.publish(twist)         
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
@@ -749,7 +714,7 @@ class image_converter:
             ros_image = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
             ros_image.header.stamp = data.header.stamp
             self.ros_image_pub.publish(ros_image)
-            cv2.imshow("Image window", cv_image)
+            # cv2.imshow("Image window", cv_image)
             cv2.waitKey(1) & 0xFF
 
 

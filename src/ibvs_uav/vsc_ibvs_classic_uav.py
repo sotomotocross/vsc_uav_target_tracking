@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from __future__ import print_function
 import roslib
-roslib.load_manifest('lfd')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -21,7 +21,7 @@ from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from lfd.msg import VSCdata
+from vsc_uav_target_tracking.msg import VSCdata
 from operator import itemgetter
 
 
@@ -63,7 +63,7 @@ class image_converter:
         self.ax = 252.07
         self.ay = 252.07
         
-        # Variables initialization
+    # Variables initialization
         self.x = 0.0
         self.y = 0.0
         self.z = 1.0
@@ -75,8 +75,7 @@ class image_converter:
         self.a = 0.2
         self.time = rospy.Time.now().to_sec()
 
-
-
+    
     # Callback function updating the IMU measurements (rostopic /mavros/imu/data)
     def updateImu(self, msg):
         self.phi_imu = msg.orientation.x
@@ -209,52 +208,27 @@ class image_converter:
     
         return mp_pixel
 
-
-    # Function calculating the derivative of the error of the pixels on the image plane
-    def deriv_error_estimation(self, er_pix, er_pix_prev):
-        
-        ew = (er_pix - er_pix_prev)/self.dt 
-
-        return ew
-
     def quadrotorVSControl(self, Lm, er_pix):
         
-        Kc = 0.8
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1))
-        
-        return Ucmd
-        
-    def quadrotorVSControl_tracking(self, Lm, er_pix, vel_camera, er_pix_prev):
-        
-        # Kc = 1.2
-        first_gain_Kc = 0.8
-        yaw_gain_Kc = 2.5
+        forward_gain_Kc = -2.2
+        thrust_gain_Kc = 0.0
+        sway_gain_Kc = 1.0
+        yaw_gain_Kc = -2.5
         Kc = np.identity(6)
-        Kc[0][0] = first_gain_Kc
-        Kc[1][1] = first_gain_Kc
-        Kc[2][2] = first_gain_Kc
-        Kc[3][3] = 0.0
+        Kc[0][0] = thrust_gain_Kc
+        Kc[1][1] = sway_gain_Kc
+        Kc[2][2] = forward_gain_Kc
+        Kc[3][3] = yaw_gain_Kc
         Kc[4][4] = 0.0
-        Kc[5][5] = yaw_gain_Kc
+        Kc[5][5] = 0.0
 
-        Ke = 0.06
-        # Ke = np.identity(6)
-        # first_gain_Ke = 0.001
-        # yaw_gain_Ke = 0.003
-        # Kc = np.identity(6)
-        # Kc[0][0] = first_gain_Ke
-        # Kc[1][1] = first_gain_Ke
-        # Kc[2][2] = first_gain_Ke
-        # Kc[3][3] = 0.0
-        # Kc[4][4] = 0.0
-        # Kc[5][5] = yaw_gain_Ke
-
-        ew = (er_pix - er_pix_prev)/self.dt - np.array(np.dot(Lm, vel_camera)).reshape(8,1)  
-        # print("ew: ", np.dot(np.linalg.pinv(Lm), ew))    
-        # Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew))
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - Ke*np.dot(np.linalg.pinv(Lm), ew)
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+1.0*np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1))
+        # print("1st control term: ", -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix)))
+        # print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
+        # print ("Final control law calculation: ", Ucmd)
         
         return Ucmd
+    
     
     # Detect the line and piloting
     def line_detect(self, cv_image):
@@ -265,8 +239,8 @@ class image_converter:
         kernel = np.ones((1, 1), np.uint8)
         mask = cv2.erode(mask, kernel, iterations=3)
         mask = cv2.dilate(mask, kernel, iterations=3)
-        # contours_blk, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        _, contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_blk, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # _, contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         contours_blk.sort(key=cv2.minAreaRect)
 
         
@@ -324,24 +298,15 @@ class image_converter:
             # print("From body to camera transformation: ", T)                   
             # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
             Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
-            # print("Error pixel: ", er_pix)  
-            velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)            
-            # print("Camera velocity: ", velocity_camera)
-            # UVScmd = self.quadrotorVSControl(Lm, er_pix)
-            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, velocity_camera, self.er_pix_prev)
+            # print("Error pixel: ", er_pix)
+            UVScmd = self.quadrotorVSControl(Lm, er_pix)
             UVScmd = np.dot(T, UVScmd)
-            self.er_pix_prev = er_pix
-            # print("Previous error: ", self.er_pix_prev)
-            # print("UVScmd is: ", UVScmd)
+            print("UVScmd is: ", UVScmd)
              
             self.uav_vel_body[0] = UVScmd[0]
             self.uav_vel_body[1] = UVScmd[1]
             self.uav_vel_body[2] = UVScmd[2]
             self.uav_vel_body[3] = UVScmd[5]
-            # print("1st uav vel body is: ", self.uav_vel_body[0])
-            # print("2nd uav vel body is: ", self.uav_vel_body[1])
-            # print("3rd uav vel body is: ", self.uav_vel_body[2])
-            # print("4th uav vel body is: ", self.uav_vel_body[3])
             
             twist = PositionTarget()
             #twist.header.stamp = 1
@@ -354,7 +319,7 @@ class image_converter:
             twist.yaw_rate = self.uav_vel_body[3]
             # twist.velocity.x = 0.0
             # twist.velocity.y = 0.0
-            twist.velocity.z = 0.0
+            # twist.velocity.z = 0.0
             # twist.yaw_rate = 0.0
 
             vsc_msg = VSCdata()
@@ -370,7 +335,7 @@ class image_converter:
             # vsc_msg.v_bc = v_bc
             vsc_msg.time = t_vsc
             self.pub_vsc_data.publish(vsc_msg)
-            self.pub_vel.publish(twist)        
+            # self.pub_vel.publish(twist)       
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
@@ -385,7 +350,7 @@ class image_converter:
         #         twist.velocity.y = -0.1
         #         #twist.velocity.z = 0
         #         #twist.yaw_rate = 0
-        #         self.pub_vel.publish(twist)
+        #         # self.pub_vel.publish(twist)
         #     if self.line_side == 1:  # line at the left
         #         twist.header.frame_id = 'world'
         #         twist.coordinate_frame = 8
@@ -394,7 +359,7 @@ class image_converter:
         #         twist.velocity.y = 0.1
         #         #twist.velocity.z = 0
         #         #twist.yaw_rate = 0
-        #         self.pub_vel.publish(twist)
+        #         # self.pub_vel.publish(twist)
         
         self.t = self.t+self.dt
   
@@ -415,7 +380,7 @@ class image_converter:
 def main(args):
     rospy.init_node('image_converter', anonymous=True)
     ic = image_converter()
-    # time.sleep(0.03)
+    time.sleep(0.03)
     rospy.sleep(0.03)
     #ic.cam_down()
     try:

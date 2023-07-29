@@ -4,7 +4,7 @@ from __future__ import print_function
 from numpy.core.fromnumeric import size
 from numpy.core.numeric import ones
 import roslib
-roslib.load_manifest('coastline_tracking')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -25,7 +25,7 @@ from math import *
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from coastline_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
+from vsc_uav_target_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
 from operator import itemgetter
 
 
@@ -82,7 +82,7 @@ class image_converter:
         self.psi = 0.0
         self.t = 0.0
         self.dt = 0.0335
-        self.a = 0.01
+        self.a = 0.2
         self.time = rospy.Time.now().to_sec()
         self.alpha_des = 0.0
         self.sigma_des = 14850.0
@@ -269,6 +269,65 @@ class image_converter:
         
         return Lm, er_pix
     
+    def calculate_hybrid_IM(self, mpv, mp_des, cu, cv, ax, ay):
+        x_0 = (mpv[0]-cu)/ax
+        y_0 = (mpv[1]-cv)/ay
+        Z_0 = mpv[2]
+
+        x_1 = (mpv[3]-cu)/ax
+        y_1 = (mpv[4]-cv)/ay
+        Z_1 = mpv[5]
+        
+        x_2 = (mpv[6]-cu)/ax
+        y_2 = (mpv[7]-cv)/ay
+        Z_2 = mpv[8]
+            
+        x_3 = (mpv[9]-cu)/ax
+        y_3 = (mpv[10]-cv)/ay
+        Z_3 = mpv[11]
+
+        xd_0 = (mp_des[0]-cu)/ax
+        yd_0 = (mp_des[1]-cv)/ay
+        Zd_0 = mp_des[2]
+
+        xd_1 = (mp_des[3]-cu)/ax
+        yd_1 = (mp_des[4]-cv)/ay
+        Zd_1 = mp_des[5]
+
+        xd_2 = (mp_des[6]-cu)/ax
+        yd_2 = (mp_des[7]-cv)/ay
+        Zd_2 = mp_des[8]
+
+        xd_3 = (mp_des[9]-cu)/ax
+        yd_3 = (mp_des[10]-cv)/ay
+        Zd_3 = mp_des[11]
+        
+        L_xy0 = np.array([[-1.0/Z_0, 0.0,  x_0*y_0, -(1.0+x_0*x_0)],
+                        [0.0, -1.0/Z_0, 1.0+y_0*y_0, -x_0*y_0]]).reshape(2,4)
+        L_xy1 = np.array([[-1.0/Z_1, 0.0, x_1*y_1, -(1.0+x_1*x_1)],
+                        [0.0, -1.0/Z_1, 1.0+y_1*y_1, -x_1*y_1]]).reshape(2,4)
+        L_xy2 = np.array([[-1.0/Z_2, 0.0, x_2*y_2, -(1.0+x_2*x_2)],
+                        [0.0, -1.0/Z_2, 1.0+y_2*y_2, -x_2*y_2]]).reshape(2,4)
+        L_xy3 = np.array([[-1.0/Z_3, 0.0, x_3*y_3, -(1.0+x_3*x_3)],
+                        [0.0, -1.0/Z_3, 1.0+y_3*y_3, -x_3*y_3]]).reshape(2,4)
+        L_xy = np.concatenate((L_xy0, L_xy1, L_xy2, L_xy3), axis=0)
+        
+        
+        L_z0 = np.array([[x_0/Z_0, y_0],
+                        [y_0/Z_0, -x_0]]).reshape(2,2)
+        L_z1 = np.array([[x_1/Z_1, y_1],
+                        [y_1/Z_1, -x_1]]).reshape(2,2)
+        L_z2 = np.array([[x_2/Z_2, y_2],
+                        [y_2/Z_2, -x_2]]).reshape(2,2)
+        L_z3 = np.array([[x_2/Z_2, y_2],
+                        [y_2/Z_2, -x_2]]).reshape(2,2)
+        L_z = np.concatenate((L_z0, L_z1, L_z2, L_z3), axis=0)
+        
+        er_pix = np.array([x_0-xd_0, y_0-yd_0, x_1-xd_1, y_1-yd_1, x_2-xd_2, y_2-yd_2, x_3-xd_3, y_3-yd_3 ]).reshape(8,1) #ax=ay=252.07
+        
+        return L_xy, L_z, er_pix
+        
+    
     def cartesian_from_pixel(self, mp_pixel, cu, cv, ax, ay):
         
         Z_0 = mp_pixel[2]
@@ -321,37 +380,12 @@ class image_converter:
     # Function calculating the control law both for target tracking and trajectory planning
     def quadrotorVSControl_tracking(self, Lm, er_pix, ew):
         
-        # ----- CSL Ubuntu Desktop Tuning ----
-        # forward_gain_Kc = 1.4
-        # thrust_gain_Kc = 0.0
-        # sway_gain_Kc = 1.0
-        # yaw_gain_Kc = 1.6
-        # Kc = np.identity(6)
-        # Kc[0][0] = thrust_gain_Kc
-        # Kc[1][1] = sway_gain_Kc
-        # Kc[2][2] = forward_gain_Kc
-        # Kc[3][3] = yaw_gain_Kc
-        # Kc[4][4] = 0.0
-        # Kc[5][5] = 0.0
-
-        # Ke = np.identity(6)
-        # forward_gain_Ke = 1.5
-        # thrust_gain_Ke = 0.0
-        # sway_gain_Ke = 1.2
-        # yaw_gain_Ke = 1.8
-        # Ke = np.identity(6)
-        # Ke[0][0] = thrust_gain_Ke
-        # Ke[1][1] = sway_gain_Ke
-        # Ke[2][2] = forward_gain_Ke
-        # Ke[3][3] = yaw_gain_Ke
-        # Ke[4][4] = 0.0
-        # Ke[5][5] = 0.0
-        # --------------------------------------
+        # print("shape of Lm = ", Lm.shape)
         
-        # ----- Home Ubuntu Desktop Tuning ----
-        forward_gain_Kc = 0.5
+        # ----- CSL Ubuntu Desktop Tuning ----
+        forward_gain_Kc = 1.4
         thrust_gain_Kc = 0.0
-        sway_gain_Kc = 0.35
+        sway_gain_Kc = 1.0
         yaw_gain_Kc = 1.6
         Kc = np.identity(6)
         Kc[0][0] = thrust_gain_Kc
@@ -362,10 +396,10 @@ class image_converter:
         Kc[5][5] = 0.0
 
         Ke = np.identity(6)
-        forward_gain_Ke = 0.5
+        forward_gain_Ke = 1.5
         thrust_gain_Ke = 0.0
-        sway_gain_Ke = 0.35
-        yaw_gain_Ke = -2.0
+        sway_gain_Ke = 1.2
+        yaw_gain_Ke = 1.8
         Ke = np.identity(6)
         Ke[0][0] = thrust_gain_Ke
         Ke[1][1] = sway_gain_Ke
@@ -374,17 +408,156 @@ class image_converter:
         Ke[4][4] = 0.0
         Ke[5][5] = 0.0
         # --------------------------------------
+        
+        # ----- Home Ubuntu Desktop Tuning ----
+        # forward_gain_Kc = 1.4
+        # thrust_gain_Kc = 0.0
+        # sway_gain_Kc = 1.0
+        # yaw_gain_Kc = -2.0
+        # Kc = np.identity(6)
+        # Kc[0][0] = thrust_gain_Kc
+        # Kc[1][1] = sway_gain_Kc
+        # Kc[2][2] = forward_gain_Kc
+        # Kc[3][3] = yaw_gain_Kc
+        # Kc[4][4] = 0.0
+        # Kc[5][5] = 0.0
+
+        # Ke = np.identity(6)
+        # forward_gain_Ke = 1.4
+        # thrust_gain_Ke = 0.0
+        # sway_gain_Ke = 1.4
+        # yaw_gain_Ke = -2.2
+        # Ke = np.identity(6)
+        # Ke[0][0] = thrust_gain_Ke
+        # Ke[1][1] = sway_gain_Ke
+        # Ke[2][2] = forward_gain_Ke
+        # Ke[3][3] = yaw_gain_Ke
+        # Ke[4][4] = 0.0
+        # Ke[5][5] = 0.0
+        # --------------------------------------
 
 
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew))
         # print("1st control term: ", Kc*np.dot(np.linalg.pinv(Lm), er_pix))
         # print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
         # print("3rd control term: ", Ke*np.dot(np.linalg.pinv(Lm), ew))
         # print ("Final control law calculation: ", Ucmd)
         
-        # Ucmd = [0.0, 0.0, 0.0, 0.0, 0.1, 0.1]
-        
         return Ucmd
+    
+    def quadrotor_hybrid_VS_tracking(self, L_xy, L_z, er_pix, ew):
+        
+        # -- Tuning of PVS for stabilization --
+        # control_gain = np.identity(4)
+        # control_gain[0][0] = 0.0  # thrust gain
+        # control_gain[1][1] = 0.035  # sway gain
+        # control_gain[2][2] = 0.045  # yaw gain
+        # control_gain[3][3] = 0.0  # 
+        
+        # control_gain_part = np.identity(4)
+        # control_gain_part[0][0] = 0.0  # thrust gain
+        # control_gain_part[1][1] = 0.05  # sway gain
+        # control_gain_part[2][2] = 0.05  # yaw gain
+        # control_gain_part[3][3] = 0.0  # 
+        
+        # lvz = 0.0  # translational z-axes velocity (becomes forward velocity)
+        # l_om_z = 0.0  # angular z-axes velocity
+        # --------------------------------------
+        
+        # ---- Tuning of PVS for tracking ----
+        control_gain = np.identity(4)
+        control_gain[0][0] = 1.0  # thrust gain
+        control_gain[1][1] = 1.0  # sway gain
+        control_gain[2][2] = 1.0  # yaw gain
+        control_gain[3][3] = 1.0  # 
+        
+        control_gain_est = np.identity(4)
+        control_gain_est[0][0] = 1.0  # thrust gain
+        control_gain_est[1][1] = 1.0  # sway gain
+        control_gain_est[2][2] = 1.0 # yaw gain
+        control_gain_est[3][3] = 1.0  # 
+        
+        control_gain_part = np.identity(4)
+        control_gain_part[0][0] = 1.0  # thrust gain
+        control_gain_part[1][1] = 1.0  # sway gain
+        control_gain_part[2][2] = 1.0  # yaw gain
+        control_gain_part[3][3] = 1.0  # 
+        
+        lvz = 1.0 # forward gain
+        l_om_z = 1.0  # angular z-axes velocity
+        # --------------------------------------
+                
+        v_z = lvz*log(self.sigma_des/self.sigma)
+        # print("v_z = ", v_z)
+        omega_z = l_om_z*(self.alpha_des - self.alpha)
+        # print("omega_z = ", omega_z)
+        
+        # np.linalg.pinv(L_xy)
+        
+        # PVScmd_1 = er_pix
+        # PVScmd_2 = np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)
+        # PVScmd_3 = ew
+        # PVScmd_4 = np.dot(L_z,np.array([v_z, omega_z]).reshape(2,1))
+
+        PVScmd_1 = -np.dot(control_gain,np.dot(np.linalg.pinv(L_xy), er_pix))
+        PVScmd_2 = np.dot(np.linalg.pinv(L_xy), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1))
+        PVScmd_3 = -np.dot(control_gain_est, np.dot(np.linalg.pinv(L_xy), ew))
+        PVScmd_4 = -np.dot(control_gain_part, np.dot(np.linalg.pinv(L_xy),np.dot(L_z,np.array([v_z, omega_z]).reshape(2,1))))
+        
+        # print("PVScmd_1 = ", PVScmd_1)
+        # print("shape of PVScmd_1 = ", PVScmd_1.shape)
+        # print("PVScmd_2 = ", PVScmd_2)
+        # print("shape of PVScmd_2 = ", PVScmd_2.shape)
+        # print("PVScmd_3 = ", PVScmd_3)
+        # print("shape of PVScmd_3 = ", PVScmd_3.shape)
+        # print("PVScmd_4 = ", PVScmd_4)
+        # print("shape of PVScmd_4 = ", PVScmd_4.shape)
+        
+        # PVScmd_without_gain = PVScmd_1 + PVScmd_2 + PVScmd_3 + PVScmd_4
+        
+        PVScmd = PVScmd_1 + PVScmd_2 + PVScmd_3 + PVScmd_4
+        # PVScmd = PVScmd_1 + PVScmd_2 + PVScmd_3
+        # print("PVScmd = ", PVScmd)
+        # print("shape of PVScmd = ", PVScmd.shape)
+        
+        # -----  Stabilization -----
+        # forward_gain_final = 0.0
+        # thrust_gain_final = 0.0
+        # sway_gain_final = 0.005
+        # yaw_gain_final = 0.005
+        # final_control_gain = np.identity(6)
+        # final_control_gain[0][0] = thrust_gain_final
+        # final_control_gain[1][1] = sway_gain_final
+        # final_control_gain[2][2] = forward_gain_final
+        # final_control_gain[3][3] = yaw_gain_final
+        # final_control_gain[4][4] = 0.0
+        # final_control_gain[5][5] = 0.0
+        # --------------------------
+        
+        # -----  Planning/Tracking -----
+        forward_gain_final = -3.0
+        thrust_gain_final = 0.0
+        sway_gain_final = 0.00009
+        yaw_gain_final = 0.009
+        final_control_gain = np.identity(6)
+        final_control_gain[0][0] = thrust_gain_final
+        final_control_gain[1][1] = sway_gain_final
+        final_control_gain[2][2] = forward_gain_final
+        final_control_gain[3][3] = yaw_gain_final
+        final_control_gain[4][4] = 0.0
+        final_control_gain[5][5] = 0.0
+        # -------------------------------
+        
+                        
+        PVScmd = np.array([PVScmd[0][0], PVScmd[1][0], v_z, PVScmd[2][0], PVScmd[3][0], omega_z]).reshape(6,1)
+        # print("PVScmd = ", PVScmd)
+        PVScmd = np.dot(final_control_gain, PVScmd)
+        # print("complete PVScmd = ", PVScmd)
+        # print("shape of complete PVScmd = ", PVScmd.shape)
+        
+        return PVScmd
+        
+        
     
 
     # Detect the line and piloting
@@ -415,14 +588,14 @@ class image_converter:
                 angle = (90 - angle) * -1
             if w_min > h_min and angle < 0:
                 angle = 90 + angle
-            
+
             self.alpha = angle
             # print("angle = ", self.alpha)
             # print("angle_des = ", self.alpha_des)
             self.sigma = cv2.contourArea(contours_blk[0])
             # print("box area = ", self.sigma)
-            # print("desired box area = ", self.sigma_des) 
-
+            # print("desired box area = ", self.sigma_des)
+            
             # Recreation of the feature box
             if angle >= 0:
                 # print("1st control choice")
@@ -442,7 +615,7 @@ class image_converter:
             # print("mp_cartesian_v: ", mp_cartesian_v)
             mp_pixel_v = self.pixels_from_cartesian(mp_cartesian_v, self.cu, self.cv, self.ax, self.ay)
             # print("mp_pixel_v: ", mp_pixel_v)
-
+            
             mp_des = np.array([420, 472+self.a*self.t, self.z, 367, 483+self.a*self.t, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
             # print("mp_des: ", mp_des)
             
@@ -459,10 +632,14 @@ class image_converter:
             T[0:3, 0:3] = R_y
             T[3:6, 3:6] = R_y
             T[0:3, 3:6] = np.dot(sst, R_y)
-            # print("From body to camera transformation: ", T)                   
+            # print("From body to camera transformation: ", T) 
+                              
             # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
             Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
+            L_xy, L_z, er_pix = self.calculate_hybrid_IM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
             # print("Error pixel: ", er_pix)
+            
+            
             # print("Body velocity measurement: ", self.vel_uav)
             # velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)
             # print("1st velocity camera: ", velocity_camera)
@@ -488,24 +665,32 @@ class image_converter:
             e_m_dot = (ew_filtered_odometry[0]+ew_filtered_odometry[2]+ew_filtered_odometry[4]+ew_filtered_odometry[6])/4
             # print("e_m_dot: ", e_m_dot)
             self.ekf_estimation(e_m, e_m_dot)
-            # print("Extended kalman filter estimation: ", self.x_est)
-            # print("Extended kalman filter velocity estimation: ", wave_est[1])
-            # wave_estimation_final = np.array([wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0]]).reshape(8,1)
             wave_est_control_input = self.x_est[1]
             wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8,1)
             # print("final estimation: ", wave_estimation_final)
             
-            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_estimation_final)
-            # UVScmd = np.dot(T, UVScmd)
-            UVScmd = np.dot(np.linalg.inv(T), UVScmd)
+            # UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_estimation_final)
+            # print("UVScmd = ", UVScmd)
+            PVScmd = self.quadrotor_hybrid_VS_tracking(L_xy, L_z, er_pix, wave_estimation_final)
+            # print("PVScmd = ", PVScmd)
+            # UVScmd = np.dot(np.linalg.inv(T), UVScmd)
+            # print("transformed UVScmd = ", UVScmd)
+            PVScmd = np.dot(np.linalg.inv(T), PVScmd)
+            # print("transformed PVScmd = ", PVScmd)
             self.er_pix_prev = er_pix
+            
             # print("er_pix_prev: ", self.er_pix_prev)    
             # print("UVScmd: ", UVScmd)        
              
-            self.uav_vel_body[0] = UVScmd[0]
-            self.uav_vel_body[1] = UVScmd[1]
-            self.uav_vel_body[2] = UVScmd[2]
-            self.uav_vel_body[3] = UVScmd[5]
+            # self.uav_vel_body[0] = UVScmd[0]
+            # self.uav_vel_body[1] = UVScmd[1]
+            # self.uav_vel_body[2] = UVScmd[2]
+            # self.uav_vel_body[3] = UVScmd[5]
+            
+            self.uav_vel_body[0] = PVScmd[0]
+            self.uav_vel_body[1] = PVScmd[1]
+            self.uav_vel_body[2] = PVScmd[2]
+            self.uav_vel_body[3] = PVScmd[5]
             
             twist = PositionTarget()
             #twist.header.stamp = 1
@@ -530,21 +715,17 @@ class image_converter:
             ekf_msg.time = t_vsc
             self.pub_ekf_data.publish(ekf_msg)
             
-            ibvs_msg = IBVSdata()
-            ibvs_msg.errors = er_pix
-            ibvs_msg.cmds = self.uav_vel_body
-            print("ibvs_msg.cmds: ", ibvs_msg.cmds)
-            ibvs_msg.time = t_vsc
-            self.pub_ibvs_data.publish(ibvs_msg)
+            pvs_msg = PVSdata()
+            pvs_msg.errors = er_pix
+            pvs_msg.cmds = self.uav_vel_body
+            print("pvs_msg.cmds: ", pvs_msg.cmds)
+            pvs_msg.alpha = self.alpha
+            pvs_msg.alpha_des = self.alpha_des
+            pvs_msg.sigma = self.sigma
+            pvs_msg.sigma_des = self.sigma_des
+            pvs_msg.time = t_vsc
+            self.pub_pvs_data.publish(pvs_msg)            
             
-            # pvs_msg = PVSdata()
-            # pvs_msg.alpha = self.alpha
-            # pvs_msg.alpha_des = self.alpha_des
-            # pvs_msg.sigma = self.sigma
-            # pvs_msg.sigma_des = self.sigma_des
-            # pvs_msg.time = t_vsc
-            # self.pub_pvs_data.publish(pvs_msg) 
-
             self.pub_vel.publish(twist)         
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
