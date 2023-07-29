@@ -20,7 +20,7 @@ This is a PVS implementation for the same application considering the decoupling
 ```
 $ rosrun vsc_uav_target_tracking part_vs_track_ekf_est.py
 ```
-In this case we managed to extend the target motion state estimation module incorporating the [Flownet 2](https://github.com/lmb-freiburg/ROS-packages.git)implementation and a hybrid model-based and data-driven framework (named [KalmanNet](https://github.com/KalmanNet/KalmanNet_TSP.git)) estimating again the velocity of the waves incorporated in our PVS controller.
+In this case we managed to extend the target motion state estimation module incorporating the [Flownet 2](https://github.com/lmb-freiburg/ROS-packages.git) implementation and a hybrid model-based and data-driven framework (named [KalmanNet](https://github.com/KalmanNet/KalmanNet_TSP.git)) estimating again the velocity of the waves incorporated in our PVS controller.
 ```
 $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
