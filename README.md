@@ -3,12 +3,12 @@ This is a ROS python package of various Visual servo controllers for UAV aiming 
 The different version of visual servoing will be analyzed below.
 The controllers were all developed in a UAV synthetic simulation environment: https://github.com/sotomotocross/UAV_simulator_ArduCopter.git
 
-## Classic IBVS method (Study presented on [[1]](#1))
+## Classic IBVS method (Study presented on [[1]](https://ieeexplore.ieee.org/abstract/document/9837275))
 We initially implemented 
 
 
 
 ## References
 <a id="1">[1]</a> 
-A visual servoing strategy for coastline tracking using an unmanned aerial vehicle
-Sotirios N Aspragkathos, George C Karras, Kostas J Kyriakopoulos.
+S. N. Aspragkathos, G. C. Karras, and K. J. Kyriakopoulos, “A visual servoing strategy for coastline tracking using an unmanned aerial vehicle", in 2022 30th Mediterranean Conference on Control and
+Automation (MED), pp. 375–381, IEEE, 2022
