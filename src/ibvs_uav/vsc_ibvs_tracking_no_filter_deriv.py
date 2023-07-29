@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 from __future__ import print_function
-
-from numpy.core.fromnumeric import size
-from numpy.core.numeric import ones
 import roslib
-roslib.load_manifest('coastline_tracking')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -20,12 +17,11 @@ from sensor_msgs.msg import Image, Imu
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Twist, Vector3Stamped, TwistStamped
 from numpy.linalg import norm
-# from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
-from math import *
+from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from coastline_tracking.msg import VSCdata
+from vsc_uav_target_tracking.msg import VSCdata
 from operator import itemgetter
 
 
@@ -39,7 +35,6 @@ class image_converter:
         self.pub_angle = rospy.Publisher('angle', Int16, queue_size=10)
         self.pub_vsc_data = rospy.Publisher("/vsc_data", VSCdata, queue_size=1000)
         self.pub_im = rospy.Publisher('im', Image, queue_size=10)
-        self.ros_image_pub = rospy.Publisher("image_bounding_box", Image, queue_size=10)
         self.bridge = CvBridge()
         
         #Create subscribers
@@ -47,7 +42,6 @@ class image_converter:
         self.imu_sub = rospy.Subscriber("/mavros/imu/data", Imu, self.updateImu)
         self.pos_sub = rospy.Subscriber("/mavros/global_position/local", Odometry, self.OdomCb)
         self.vel_uav = rospy.Subscriber("/mavros/local_position/velocity_body", TwistStamped, self.VelCallback)
-        self.opt_flow_img_sub = rospy.Subscriber("/flownet",Image,self.image_callback)         
         
         # uav state variables
         self.landed = 0
@@ -55,12 +49,10 @@ class image_converter:
         self.uav_vel_body = np.array([0.0, 0.0, 0.0, 0.0])
         self.vel_uav = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.er_pix_prev = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)
-        self.mp_cartesian = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
-        self.mp_pixel = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         # ZED stereo camera translation and rotation variables
-        self.transCam = [0.0, 0.0, -0.14]
-        self.rotCam = [0.0, 1.57, 0.0]
+        self.transCam = [0.0, 0.0, 0.14]
+        self.rotCam = [0.0, -1.57, 0.0]
         self.phi_cam = self.rotCam[0]
         self.theta_cam = self.rotCam[1]
         self.psi_cam = self.rotCam[2]
@@ -79,136 +71,12 @@ class image_converter:
         self.theta_imu = 0.0 
         self.psi = 0.0
         self.t = 0.0
-        self.dt = 0.0335
+        self.dt = 0.03
         self.a = 0.2
         self.time = rospy.Time.now().to_sec()
 
-        # Definition of moving average filter parameters
-        self.av_window = []
-        self.cntr = 0
-        self.window_size = 4
-        self.values = []
-        self.sum = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)    
 
-        # Definition of Extended Kalman Filter parameters
-        # self.P = 10.0*np.eye(3, dtype=float)
-        # self.x_est = np.array([0.1, 0.1, 0.1],  dtype=float).reshape(3,1)
-        self.P = 100.0*np.eye(4, dtype=float)
-        self.x_est = np.array([0.4, 0.4, 0.4, 0.4],  dtype=float).reshape(4,1)
 
-    
-    def ekf_estimation(self, e_m, e_m_dot):
-        
-        #e_m: centroid error (e_m = x - xd = (u-ud)/ax)
-        #e_dot_m : gradient (velocity) after removing the camera velocity
-        #Ts: sampling time e.g. Ts = 0.1
-        #P initial filter covariance matrix
-        #x_est initial estimate to be update by Kalman
-        
-        # print("e_m in the EKF:", e_m)
-        # print("e_m_dot in the EKF:", e_m_dot)
-
-        PHI_S1 = 0.001 #Try to change these e.g. 0.1
-        PHI_S2 = 0.001 #Try to change these e.g. 0.1
-
-        F_est = np.zeros((4, 4), dtype=float)
-        F_est [0,1] = 1.0
-        F_est [1,0] = -self.x_est[2]**2
-        F_est [1,2] = -2.0*self.x_est[2]*self.x_est[0] + 2.0*self.x_est[2]*self.x_est[3]
-        F_est [1,3] = self.x_est[2]**2
-        # print("F_est: ", F_est)
-        
-        PHI_k = np.eye(4,4) + F_est*self.dt
-        # print("PHI_k: ", PHI_k)
-        
-        Q_k = np.array([[0.001, 0.0, 0.0, 0.0],
-                        [0.0, 0.5*PHI_S1*(-2.0*self.x_est[2]*self.x_est[0]+2.0*self.x_est[2]*self.x_est[3])**2*(self.dt**2)+0.333*self.x_est[2]**4*(self.dt**3)*PHI_S2, 0.0, 0.5*self.x_est[2]**2*(self.dt**2)*PHI_S2],
-                        [0.0, 0.5*PHI_S1*(-2.0*self.x_est[2]*self.x_est[0]+2.0*self.x_est[2]*self.x_est[3])**2*(self.dt**2), PHI_S1*self.dt, 0.0],
-                        [0.0, 0.5*PHI_S2*(self.dt**2)*self.x_est[2]**2, 0.0, PHI_S2*self.dt]], dtype=float).reshape(4,4)
-        # print("Q_k: ", Q_k)
-
-        H_k = np.array([[1.0, 0.0, 0.0, 0.0], 
-                        [0.0, 1.0, 0.0, 0.0]], dtype=float).reshape(2,4)
-        # print("H_k: ", H_k)
-        
-        R_k = 0.1*np.eye(2, dtype=float)
-        # print("R_k: ", R_k)
-
-        M_k = np.dot(np.dot(PHI_k,self.P), PHI_k.transpose()) + Q_k
-        # print("M_k: ", M_k)
-        K_k = np.dot(np.dot(M_k, H_k.transpose()), np.linalg.inv(np.dot(np.dot(H_k, M_k), H_k.transpose()) + R_k) )
-        # print("K_k: ", K_k)
-        self.P = np.dot((np.eye(4) - np.dot(K_k, H_k)), M_k)
-        # print("P: ", P)
-
-        xdd = -((self.x_est[2]**2)*self.x_est[0]) + (self.x_est[2]**2)*self.x_est[3]
-        # print("xdd: ", xdd)
-        xd = self.x_est[1] + self.dt*xdd
-        # print("xd: ", xd)
-        x = self.x_est[0] + self.dt*xd
-        # print("x: ", x)
-
-        x_dash_k = np.array([x, xd, self.x_est[2], self.x_est[3]]).reshape(4,1)
-        # print("x_dash_k: ", x_dash_k)
-        
-        z = np.array([e_m, e_m_dot]).reshape(2,1)
-        
-        self.x_est = np.dot(PHI_k, x_dash_k) + np.dot(K_k, z - np.dot(H_k, np.dot(PHI_k, x_dash_k)))
-        # print("self.x_est: ", self.x_est)
-
-        # return self.x_est # [estimated wave position, estimated wave velocity, estimated frequency] --> you only need x_est[1]: velocity
-
-    # Function calling a Moving Average Filter
-    def moving_average_filter(self, value):
-        self.values.append(value)
-
-        self.sum = [a + b for a, b in zip(value, self.sum)]
-        
-        if len(self.values) > self.window_size:
-            self.sum = [a - b for a, b in zip(self.sum, self.values.pop(0))]
-            
-        ew_filtered = [float(a)/len(self.values) for a in self.sum]
-        ew_filtered = np.array(ew_filtered).reshape(8,1)
-
-        return ew_filtered
-    
-    
-    def image_callback(self, msg):
-        try:
-            opt_flow_cv_image = self.bridge.imgmsg_to_cv2(msg, "32FC2")
-            # print("data encoding: ", data.encoding)
-            # print("shape of output: ", cv_image.shape)
-            # print("dtype of output: ", cv_image.dtype)
-            width = opt_flow_cv_image.shape[0]
-            height = opt_flow_cv_image.shape[1]      
-            # print("img_0: ", opt_flow_cv_image[0:height,0:width,0])
-            # print("img_1: ", opt_flow_cv_image[0:height,0:width,1])
-            
-            self.img0 = np.array(opt_flow_cv_image[0:width,0:height,0])
-            self.img1 = np.array(opt_flow_cv_image[0:width,0:height,1])
-            print("img0 new shape: ", self.img0.shape)
-            print("img1 new shape: ", self.img1.shape)
-            
-            # print("img0: ", img0)
-            # print("img1: ", img1)
-            
-            # print("img0 maximum of the output: ", np.max(self.img0))
-            # print("img0 minimum of the output: ", np.min(self.img0))
-            # print("img0 mean of the output: ", np.mean(self.img0))
-            
-            # print("img1 maximum of the output: ", np.max(self.img1))
-            # print("img1 minimum of the output: ", np.min(self.img1))
-            # print("img1 mean of the output: ", np.mean(self.img1))
-            
-            # print("maximum of the output: ",  np.max(opt_flow_cv_image))
-            # print("minimum of the output: ", np.min(opt_flow_cv_image))
-            # print("mean of the output: ", np.mean(opt_flow_cv_image))
-            # print("opt_flow_cv_image_0.shape: ", opt_flow_cv_image[:,:,0].shape)
-            # print("opt_flow_cv_image_1.shape: ", opt_flow_cv_image[:,:,1].shape)
-        except CvBridgeError as e:
-            print(e)
-            
-    
     # Callback function updating the IMU measurements (rostopic /mavros/imu/data)
     def updateImu(self, msg):
         self.phi_imu = msg.orientation.x
@@ -252,6 +120,8 @@ class image_converter:
         
         return mpv
     
+    
+    # Function forming the image plane features and forming the interaction matrices for all the features
     def calculateIM(self, mpv, mp_des, cu, cv, ax, ay):
         
         x_0 = (mpv[0]-cu)/ax
@@ -347,74 +217,45 @@ class image_converter:
 
         return ew
 
-
-    # Function calculating the control law both for target tracking and trajectory planning
-    def quadrotorVSControl_tracking(self, Lm, er_pix, ew):
+    def quadrotorVSControl(self, Lm, er_pix):
         
-        # ----- CSL Ubuntu Desktop Tuning ----
-        forward_gain_Kc = 0.0
-        thrust_gain_Kc = 0.0
-        sway_gain_Kc = 0.5
-        yaw_gain_Kc = 1.6
+        Kc = 0.8
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1))
+        
+        return Ucmd
+        
+    def quadrotorVSControl_tracking(self, Lm, er_pix, vel_camera, er_pix_prev):
+        
+        # Kc = 1.2
+        first_gain_Kc = 0.8
+        yaw_gain_Kc = 2.5
         Kc = np.identity(6)
-        Kc[0][0] = thrust_gain_Kc
-        Kc[1][1] = sway_gain_Kc
-        Kc[2][2] = forward_gain_Kc
-        Kc[3][3] = yaw_gain_Kc
+        Kc[0][0] = first_gain_Kc
+        Kc[1][1] = first_gain_Kc
+        Kc[2][2] = first_gain_Kc
+        Kc[3][3] = 0.0
         Kc[4][4] = 0.0
-        Kc[5][5] = 0.0
+        Kc[5][5] = yaw_gain_Kc
 
-        Ke = np.identity(6)
-        forward_gain_Ke = 0.0
-        thrust_gain_Ke = 0.0
-        sway_gain_Ke = 0.8
-        yaw_gain_Ke = 1.8
-        Ke = np.identity(6)
-        Ke[0][0] = thrust_gain_Ke
-        Ke[1][1] = sway_gain_Ke
-        Ke[2][2] = forward_gain_Ke
-        Ke[3][3] = yaw_gain_Ke
-        Ke[4][4] = 0.0
-        Ke[5][5] = 0.0
-        # --------------------------------------
-        
-        # ----- Home Ubuntu Desktop Tuning ----
-        # forward_gain_Kc = 1.4
-        # thrust_gain_Kc = 0.0
-        # sway_gain_Kc = 1.0
-        # yaw_gain_Kc = -2.0
+        Ke = 0.06
+        # Ke = np.identity(6)
+        # first_gain_Ke = 0.001
+        # yaw_gain_Ke = 0.003
         # Kc = np.identity(6)
-        # Kc[0][0] = thrust_gain_Kc
-        # Kc[1][1] = sway_gain_Kc
-        # Kc[2][2] = forward_gain_Kc
-        # Kc[3][3] = yaw_gain_Kc
+        # Kc[0][0] = first_gain_Ke
+        # Kc[1][1] = first_gain_Ke
+        # Kc[2][2] = first_gain_Ke
+        # Kc[3][3] = 0.0
         # Kc[4][4] = 0.0
-        # Kc[5][5] = 0.0
+        # Kc[5][5] = yaw_gain_Ke
 
-        # Ke = np.identity(6)
-        # forward_gain_Ke = 1.4
-        # thrust_gain_Ke = 0.0
-        # sway_gain_Ke = 1.4
-        # yaw_gain_Ke = -2.2
-        # Ke = np.identity(6)
-        # Ke[0][0] = thrust_gain_Ke
-        # Ke[1][1] = sway_gain_Ke
-        # Ke[2][2] = forward_gain_Ke
-        # Ke[3][3] = yaw_gain_Ke
-        # Ke[4][4] = 0.0
-        # Ke[5][5] = 0.0
-        # --------------------------------------
-
-
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
-        # print("1st control term: ", Kc*np.dot(np.linalg.pinv(Lm), er_pix))
-        # print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
-        # print("3rd control term: ", Ke*np.dot(np.linalg.pinv(Lm), ew))
-        # print ("Final control law calculation: ", Ucmd)
+        ew = (er_pix - er_pix_prev)/self.dt - np.array(np.dot(Lm, vel_camera)).reshape(8,1)  
+        # print("ew: ", np.dot(np.linalg.pinv(Lm), ew))    
+        # Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew))
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - Ke*np.dot(np.linalg.pinv(Lm), ew)
         
         return Ucmd
     
-
     # Detect the line and piloting
     def line_detect(self, cv_image):
         t_vsc = rospy.Time.now().to_sec() - self.time
@@ -427,7 +268,7 @@ class image_converter:
         contours_blk, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         # _, contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         contours_blk.sort(key=cv2.minAreaRect)
-        
+
         
         if len(contours_blk) > 0 and cv2.contourArea(contours_blk[0]) > 200:
             # Box creation for the detected coastline
@@ -464,7 +305,7 @@ class image_converter:
             mp_pixel_v = self.pixels_from_cartesian(mp_cartesian_v, self.cu, self.cv, self.ax, self.ay)
             # print("mp_pixel_v: ", mp_pixel_v)
 
-            mp_des = np.array([420, 472+self.a*self.t, self.z, 367, 483+self.a*self.t, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
+            mp_des = np.array([420, 472, self.z, 367, 483, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
             # print("mp_des: ", mp_des)
             
             cv2.drawContours(cv_image, [box], 0, (0, 0, 255), 1)
@@ -483,65 +324,24 @@ class image_converter:
             # print("From body to camera transformation: ", T)                   
             # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
             Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
-            # print("Error pixel: ", er_pix)
-            # print("Body velocity measurement: ", self.vel_uav)
-            # velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)
-            # print("1st velocity camera: ", velocity_camera)
-            velocity_camera = np.dot(T, self.vel_uav)
-            # print("2nd velocity camera: ", velocity_camera)
-            # print("Transformation to the camera velocity measurement: ", np.dot(T, self.vel_uav))
-            # print("Inverse transformation to the camera velocity measurement: ", np.dot(np.linalg.inv(T), self.vel_uav))
-            # print("velocity_camera: ", velocity_camera)
-            
-            u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
-            # print("u of centroid: ", u_bc)
-            v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
-            # print("v of centroid: ", v_bc)
-            
-            ew = self.deriv_error_estimation(er_pix, self.er_pix_prev)
-            # print("ew: ", ew)
-            ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
-            # print("ew_filtered: ", ew_filtered)          
-            ew_filtered_odometry = ew_filtered - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
-            # print("ew_filtered_odometry: ", ew_filtered_odometry)
-            
-            opt_flow_vec = [np.mean(self.img0), np.mean(self.img1), np.mean(self.img0), np.mean(self.img1), np.mean(self.img0), np.mean(self.img1), np.mean(self.img0), np.mean(self.img1)]
-            # print("opt_flow_vec = ", opt_flow_vec)
-            opt_flow_vec_reshaped = np.array(opt_flow_vec).reshape(8,1)
-            # print("opt_flow_vec_reshaped = ", opt_flow_vec_reshaped)
-            # print("np.array(np.dot(Lm, velocity_camera)).reshape(8,1) = ", np.array(np.dot(Lm, velocity_camera)).reshape(8,1))
-            
-            wave_opt_flow_est = opt_flow_vec_reshaped - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
-            # print("wave_opt_flow_est = ", wave_opt_flow_est)
-            
-            wave_opt_flow_final_input = (wave_opt_flow_est[0]+wave_opt_flow_est[2]+wave_opt_flow_est[4]+wave_opt_flow_est[6])/4
-            wave_final_est_of = np.array([wave_opt_flow_final_input, [self.a], wave_opt_flow_final_input, [self.a], wave_opt_flow_final_input, [self.a], wave_opt_flow_final_input, [self.a]]).reshape(8,1)
-            
-            e_m = (er_pix[0]+er_pix[2]+er_pix[4]+er_pix[6])/4
-            # print("e_m: ", e_m)
-            e_m_dot = (ew_filtered_odometry[0]+ew_filtered_odometry[2]+ew_filtered_odometry[4]+ew_filtered_odometry[6])/4
-            # print("e_m_dot: ", e_m_dot)
-            self.ekf_estimation(e_m, e_m_dot)
-            # print("Extended kalman filter estimation: ", self.x_est)
-            # print("Extended kalman filter velocity estimation: ", wave_est[1])
-            # wave_estimation_final = np.array([wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0]]).reshape(8,1)
-            wave_est_control_input = self.x_est[1]
-            # wave_est_control_input = np.mean(self.img0)
-            # np.mean(self.img1)
-            wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8,1)
-            # print("final estimation: ", wave_estimation_final)
-            
-            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_final_est_of)
-            # UVScmd = np.dot(T, UVScmd)
-            UVScmd = np.dot(np.linalg.inv(T), UVScmd)
+            # print("Error pixel: ", er_pix)  
+            velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)            
+            # print("Camera velocity: ", velocity_camera)
+            # UVScmd = self.quadrotorVSControl(Lm, er_pix)
+            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, velocity_camera, self.er_pix_prev)
+            UVScmd = np.dot(T, UVScmd)
             self.er_pix_prev = er_pix
-            # print("er_pix_prev: ", self.er_pix_prev)    
-            # print("UVScmd: ", UVScmd)        
+            # print("Previous error: ", self.er_pix_prev)
+            # print("UVScmd is: ", UVScmd)
              
             self.uav_vel_body[0] = UVScmd[0]
             self.uav_vel_body[1] = UVScmd[1]
             self.uav_vel_body[2] = UVScmd[2]
             self.uav_vel_body[3] = UVScmd[5]
+            # print("1st uav vel body is: ", self.uav_vel_body[0])
+            # print("2nd uav vel body is: ", self.uav_vel_body[1])
+            # print("3rd uav vel body is: ", self.uav_vel_body[2])
+            # print("4th uav vel body is: ", self.uav_vel_body[3])
             
             twist = PositionTarget()
             #twist.header.stamp = 1
@@ -554,34 +354,51 @@ class image_converter:
             twist.yaw_rate = self.uav_vel_body[3]
             # twist.velocity.x = 0.0
             # twist.velocity.y = 0.0
-            # twist.velocity.z = 0.0
+            twist.velocity.z = 0.0
             # twist.yaw_rate = 0.0
 
             vsc_msg = VSCdata()
             vsc_msg.errors = er_pix
             # print("vsc_msg.errors: ", vsc_msg.errors)
-            # print("\n")
             vsc_msg.cmds = self.uav_vel_body
-            # print("vsc_msg.cmds: ", vsc_msg.cmds)
-            # print("\n")
-            vsc_msg.ekf_output = self.x_est
+            print("vsc_msg.cmds: ", vsc_msg.cmds)
+            # vsc_msg.ekf_output = wave_est
             # print("vsc_msg.ekf_output: ", vsc_msg.ekf_output)
-            vsc_msg.e_m = e_m
-            vsc_msg.e_m_dot = e_m_dot
+            # vsc_msg.e_m = e_m
+            # vsc_msg.e_m_dot = e_m_dot
             # vsc_msg.u_bc = u_bc
             # vsc_msg.v_bc = v_bc
             vsc_msg.time = t_vsc
             self.pub_vsc_data.publish(vsc_msg)
-            self.pub_vel.publish(twist)         
+            # self.pub_vel.publish(twist)        
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
+
+        # if len(contours_blk) == 0 and self.was_line == 1 and self.line_back == 1:
+        #     twist = PositionTarget()
+        #     if self.line_side == -1:  # line at the right
+        #         twist.header.frame_id = 'world'
+        #         twist.coordinate_frame = 8
+        #         twist.type_mask = 1479
+        #         #twist.velocity.x = 0
+        #         twist.velocity.y = -0.1
+        #         #twist.velocity.z = 0
+        #         #twist.yaw_rate = 0
+        #         self.pub_vel.publish(twist)
+        #     if self.line_side == 1:  # line at the left
+        #         twist.header.frame_id = 'world'
+        #         twist.coordinate_frame = 8
+        #         twist.type_mask = 1479
+        #         #twist.velocity.x = 0
+        #         twist.velocity.y = 0.1
+        #         #twist.velocity.z = 0
+        #         #twist.yaw_rate = 0
+        #         self.pub_vel.publish(twist)
         
         self.t = self.t+self.dt
-        
-        
   
-
+  
   # Image processing @ 10 FPS
     def callback(self, data):
         try:
@@ -592,18 +409,13 @@ class image_converter:
         if self.takeoffed and (not self.landed):
             self.line_detect(cv_image)
             cv_image = cv2.resize(cv_image, (720, 480))
-            ros_image = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
-            ros_image.header.stamp = data.header.stamp
-            self.ros_image_pub.publish(ros_image)
-            # cv2.imshow("Image window", cv_image)
+            cv2.imshow("Image window", cv_image)
             cv2.waitKey(1) & 0xFF
-
 
 def main(args):
     rospy.init_node('image_converter', anonymous=True)
-    # t0 = rospy.Time.now().to_sec()
     ic = image_converter()
-    # time.sleep(0.01)
+    # time.sleep(0.03)
     rospy.sleep(0.03)
     #ic.cam_down()
     try:

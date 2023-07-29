@@ -4,7 +4,7 @@ from __future__ import print_function
 from numpy.core.fromnumeric import size
 from numpy.core.numeric import ones
 import roslib
-roslib.load_manifest('coastline_tracking')
+roslib.load_manifest('vsc_uav_target_tracking')
 import sys
 import rospy
 import cv2
@@ -20,11 +20,12 @@ from sensor_msgs.msg import Image, Imu
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Twist, Vector3Stamped, TwistStamped
 from numpy.linalg import norm
-from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
+# from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
+from math import *
 import tf
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from nav_msgs.msg import Odometry
-from coastline_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
+from vsc_uav_target_tracking.msg import VSCdata, PVSdata, EKFdata, IBVSdata
 from operator import itemgetter
 
 
@@ -41,13 +42,14 @@ class image_converter:
         self.pub_ibvs_data = rospy.Publisher("/ibvs_data", IBVSdata, queue_size=1000)
         self.pub_pvs_data = rospy.Publisher("/pvs_data", PVSdata, queue_size=1000)
         self.pub_im = rospy.Publisher('im', Image, queue_size=10)
+        self.ros_image_pub = rospy.Publisher("image_bounding_box", Image, queue_size=10)
         self.bridge = CvBridge()
         
         #Create subscribers
-        self.image_sub = rospy.Subscriber("/image_raww", Image, self.callback)
-        self.imu_sub = rospy.Subscriber("/mavros/imu/data", Imu, self.updateImu)
-        self.pos_sub = rospy.Subscriber("/mavros/global_position/local", Odometry, self.OdomCb)
-        self.vel_uav = rospy.Subscriber("/mavros/local_position/velocity_body", TwistStamped, self.VelCallback)
+        # self.image_sub = rospy.Subscriber("/image_raww", Image, self.callback)
+        # self.imu_sub = rospy.Subscriber("/mavros/imu/data", Imu, self.updateImu)
+        # self.pos_sub = rospy.Subscriber("/mavros/global_position/local", Odometry, self.OdomCb)
+        # self.vel_uav = rospy.Subscriber("/mavros/local_position/velocity_body", TwistStamped, self.VelCallback)
         
         # uav state variables
         self.landed = 0
@@ -55,10 +57,12 @@ class image_converter:
         self.uav_vel_body = np.array([0.0, 0.0, 0.0, 0.0])
         self.vel_uav = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.er_pix_prev = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)
+        self.mp_cartesian = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+        self.mp_pixel = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         # ZED stereo camera translation and rotation variables
-        self.transCam = [0.0, 0.0, 0.14]
-        self.rotCam = [0.0, -1.57, 0.0]
+        self.transCam = [0.0, 0.0, -0.14]
+        self.rotCam = [0.0, 1.57, 0.0]
         self.phi_cam = self.rotCam[0]
         self.theta_cam = self.rotCam[1]
         self.psi_cam = self.rotCam[2]
@@ -69,7 +73,7 @@ class image_converter:
         self.ax = 252.07
         self.ay = 252.07
         
-    # Variables initialization
+        # Variables initialization
         self.x = 0.0
         self.y = 0.0
         self.z = 1.0
@@ -77,8 +81,8 @@ class image_converter:
         self.theta_imu = 0.0 
         self.psi = 0.0
         self.t = 0.0
-        self.dt = 0.03
-        self.a = 0.2
+        self.dt = 0.0335
+        self.a = 0.01
         self.time = rospy.Time.now().to_sec()
         self.alpha_des = 0.0
         self.sigma_des = 14850.0
@@ -92,49 +96,12 @@ class image_converter:
         self.values = []
         self.sum = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)    
 
+        # Definition of Extended Kalman Filter parameters
+        # self.P = 10.0*np.eye(3, dtype=float)
+        # self.x_est = np.array([0.1, 0.1, 0.1],  dtype=float).reshape(3,1)
+        self.P = 100.0*np.eye(4, dtype=float)
+        self.x_est = np.array([0.4, 0.4, 0.4, 0.4],  dtype=float).reshape(4,1)
 
-    # Function calling a Moving Average Filter
-    def moving_average_filter(self, value):
-        self.values.append(value)
-
-        self.sum = [a + b for a, b in zip(value, self.sum)]
-        
-        if len(self.values) > self.window_size:
-            self.sum = [a - b for a, b in zip(self.sum, self.values.pop(0))]
-            
-        ew_filtered = [float(a)/len(self.values) for a in self.sum]
-        ew_filtered = np.array(ew_filtered).reshape(8,1)
-
-        return ew_filtered
-
-    
-    # Callback function updating the IMU measurements (rostopic /mavros/imu/data)
-    def updateImu(self, msg):
-        self.phi_imu = msg.orientation.x
-        self.theta_imu = msg.orientation.y
-        self.psi_imu = msg.orientation.z
-        self.w_imu = msg.orientation.w
-        self.phi_imu, self.theta_imu, self.psi_imu = euler_from_quaternion ([self.phi_imu, self.theta_imu, self.psi_imu, self.w_imu])
-    
-    
-    # Callback function updating the Odometry measurements (rostopic /mavros/global_position/local)
-    def OdomCb(self, msg):
-        self.x = msg.pose.pose.position.x
-        self.y = msg.pose.pose.position.y
-        self.z = msg.pose.pose.position.z
-        # print("Message position: ", msg.pose.pose.position)
-
-
-    # Callback function updating the Velocity measurements (rostopic /mavros/local_position/velocity_body)
-    def VelCallback(self, msg):
-    
-        self.vel_uav[0] = msg.twist.linear.x
-        self.vel_uav[1] = msg.twist.linear.y
-        self.vel_uav[2] = msg.twist.linear.z
-        self.vel_uav[3] = msg.twist.angular.x
-        self.vel_uav[4] = msg.twist.angular.y
-        self.vel_uav[5] = msg.twist.angular.z
-        # print("Message uav velocity: ", self.vel_uav)
     
     
     # Function calling the feature transformation from the image plane on a virtual image plane
@@ -151,8 +118,6 @@ class image_converter:
         
         return mpv
     
-    
-    # Function forming the image plane features and forming the interaction matrices for all the features
     def calculateIM(self, mpv, mp_des, cu, cv, ax, ay):
         
         x_0 = (mpv[0]-cu)/ax
@@ -250,24 +215,36 @@ class image_converter:
 
 
     # Function calculating the control law both for target tracking and trajectory planning
-    def quadrotorVSControl_tracking(self, Lm, er_pix, ew, vel_camera):
-        
-        # Kc = 1.2
-        first_gain_Kc = 0.8
-        yaw_gain_Kc = 2.5
+    def quadrotorVSControl_tracking(self, Lm, er_pix, ew):
+               
+        # ----- Home Ubuntu Desktop Tuning ----
+        forward_gain_Kc = 0.5
+        thrust_gain_Kc = 0.0
+        sway_gain_Kc = 0.35
+        yaw_gain_Kc = 1.6
         Kc = np.identity(6)
-        Kc[0][0] = first_gain_Kc
-        Kc[1][1] = first_gain_Kc
-        Kc[2][2] = first_gain_Kc
-        Kc[3][3] = 0.0
+        Kc[0][0] = thrust_gain_Kc
+        Kc[1][1] = sway_gain_Kc
+        Kc[2][2] = forward_gain_Kc
+        Kc[3][3] = yaw_gain_Kc
         Kc[4][4] = 0.0
-        Kc[5][5] = yaw_gain_Kc
+        Kc[5][5] = 0.0
 
-        Ke = 0.25
-        tracking_error = ew - np.array(np.dot(Lm, vel_camera)).reshape(8,1)
+        Ke = np.identity(6)
+        forward_gain_Ke = 0.5
+        thrust_gain_Ke = 0.0
+        sway_gain_Ke = 0.35
+        yaw_gain_Ke = -2.0
+        Ke = np.identity(6)
+        Ke[0][0] = thrust_gain_Ke
+        Ke[1][1] = sway_gain_Ke
+        Ke[2][2] = forward_gain_Ke
+        Ke[3][3] = yaw_gain_Ke
+        Ke[4][4] = 0.0
+        Ke[5][5] = 0.0
+        # --------------------------------------
 
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - Ke*np.dot(np.linalg.pinv(Lm), tracking_error)
-        # print("3rd term of control law: ", np.dot(np.linalg.pinv(Lm), ew))
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
         
         return Ucmd
     
@@ -300,13 +277,9 @@ class image_converter:
                 angle = (90 - angle) * -1
             if w_min > h_min and angle < 0:
                 angle = 90 + angle
-                
+            
             self.alpha = angle
-            # print("angle = ", self.alpha)
-            # print("angle_des = ", self.alpha_des)
             self.sigma = cv2.contourArea(contours_blk[0])
-            # print("box area = ", self.sigma)
-            # print("desired box area = ", self.sigma_des) 
 
             # Recreation of the feature box
             if angle >= 0:
@@ -328,7 +301,7 @@ class image_converter:
             mp_pixel_v = self.pixels_from_cartesian(mp_cartesian_v, self.cu, self.cv, self.ax, self.ay)
             # print("mp_pixel_v: ", mp_pixel_v)
 
-            mp_des = np.array([420, 472, self.z, 367, 483, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
+            mp_des = np.array([420, 472+self.a*self.t, self.z, 367, 483+self.a*self.t, self.z, 327, 2+self.a*self.t, self.z, 377, 0+self.a*self.t, self.z]) 
             # print("mp_des: ", mp_des)
             
             cv2.drawContours(cv_image, [box], 0, (0, 0, 255), 1)
@@ -344,34 +317,36 @@ class image_converter:
             T[0:3, 0:3] = R_y
             T[3:6, 3:6] = R_y
             T[0:3, 3:6] = np.dot(sst, R_y)
-            # print("From body to camera transformation: ", T)                   
-            # Interaction matrix, error of pixels and velocity commands calculation (a.k.a control execution)
-            Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
-            # print("Error pixel: ", er_pix)
-            # print("Body velocity measurement: ", self.vel_uav)
-            velocity_camera = np.dot(np.linalg.inv(T), self.vel_uav)
-            # print("1st velocity camera: ", velocity_camera)
-            # velocity_camera = np.dot(T, self.vel_uav)
-            # print("2nd velocity camera: ", velocity_camera)
-            # print("Transformation to the camera velocity measurement: ", np.dot(T, self.vel_uav))
-            # print("Inverse transformation to the camera velocity measurement: ", np.dot(np.linalg.inv(T), self.vel_uav))
-            # print("velocity_camera: ", velocity_camera)
             
-            # u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
+            Lm, er_pix = self.calculateIM(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
+            velocity_camera = np.dot(T, self.vel_uav)
+            
+            u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
             # print("u of centroid: ", u_bc)
-            # v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
+            v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
             # print("v of centroid: ", v_bc)
-                
+            
             ew = self.deriv_error_estimation(er_pix, self.er_pix_prev)
             # print("ew: ", ew)
-
             ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
-            # print("ew_filtered: ", ew_filtered)
+            # print("ew_filtered: ", ew_filtered)          
+            ew_filtered_odometry = ew_filtered - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
 
-            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, ew_filtered, velocity_camera)
-            UVScmd = np.dot(T, UVScmd)
+            e_m = (er_pix[0]+er_pix[2]+er_pix[4]+er_pix[6])/4
+            # print("e_m: ", e_m)
+            e_m_dot = (ew_filtered_odometry[0]+ew_filtered_odometry[2]+ew_filtered_odometry[4]+ew_filtered_odometry[6])/4
+            # print("e_m_dot: ", e_m_dot)
+            self.ekf_estimation(e_m, e_m_dot)
+            wave_est_control_input = self.x_est[1]
+            wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8,1)
+            # print("final estimation: ", wave_estimation_final)
+            
+            UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_estimation_final)
+            # UVScmd = np.dot(T, UVScmd)
+            UVScmd = np.dot(np.linalg.inv(T), UVScmd)
             self.er_pix_prev = er_pix
-            # print("er_pix_prev: ", self.er_pix_prev)            
+            # print("er_pix_prev: ", self.er_pix_prev)    
+            # print("UVScmd: ", UVScmd)        
              
             self.uav_vel_body[0] = UVScmd[0]
             self.uav_vel_body[1] = UVScmd[1]
@@ -389,9 +364,18 @@ class image_converter:
             twist.yaw_rate = self.uav_vel_body[3]
             # twist.velocity.x = 0.0
             # twist.velocity.y = 0.0
-            twist.velocity.z = 0.0
+            # twist.velocity.z = 0.0
             # twist.yaw_rate = 0.0
-
+            
+            ekf_msg = EKFdata()
+            ekf_msg.ekf_output = self.x_est
+            ekf_msg.e_m = e_m
+            ekf_msg.e_m_dot = e_m_dot
+            ekf_msg.u_bc = u_bc
+            ekf_msg.v_bc = v_bc
+            ekf_msg.time = t_vsc
+            self.pub_ekf_data.publish(ekf_msg)
+            
             ibvs_msg = IBVSdata()
             ibvs_msg.errors = er_pix
             ibvs_msg.cmds = self.uav_vel_body
@@ -399,41 +383,22 @@ class image_converter:
             ibvs_msg.time = t_vsc
             self.pub_ibvs_data.publish(ibvs_msg)
             
-            pvs_msg = PVSdata()
-            pvs_msg.alpha = self.alpha
-            pvs_msg.alpha_des = self.alpha_des
-            pvs_msg.sigma = self.sigma
-            pvs_msg.sigma_des = self.sigma_des
-            pvs_msg.time = t_vsc
-            self.pub_pvs_data.publish(pvs_msg) 
+            # pvs_msg = PVSdata()
+            # pvs_msg.alpha = self.alpha
+            # pvs_msg.alpha_des = self.alpha_des
+            # pvs_msg.sigma = self.sigma
+            # pvs_msg.sigma_des = self.sigma_des
+            # pvs_msg.time = t_vsc
+            # self.pub_pvs_data.publish(pvs_msg) 
 
-            # self.pub_vel.publish(twist)    
+            self.pub_vel.publish(twist)         
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
-
-        # if len(contours_blk) == 0 and self.was_line == 1 and self.line_back == 1:
-        #     twist = PositionTarget()
-        #     if self.line_side == -1:  # line at the right
-        #         twist.header.frame_id = 'world'
-        #         twist.coordinate_frame = 8
-        #         twist.type_mask = 1479
-        #         #twist.velocity.x = 0
-        #         twist.velocity.y = -0.1
-        #         #twist.velocity.z = 0
-        #         #twist.yaw_rate = 0
-        #         self.pub_vel.publish(twist)
-        #     if self.line_side == 1:  # line at the left
-        #         twist.header.frame_id = 'world'
-        #         twist.coordinate_frame = 8
-        #         twist.type_mask = 1479
-        #         #twist.velocity.x = 0
-        #         twist.velocity.y = 0.1
-        #         #twist.velocity.z = 0
-        #         #twist.yaw_rate = 0
-        #         self.pub_vel.publish(twist)
         
         self.t = self.t+self.dt
+        
+        
   
 
   # Image processing @ 10 FPS
@@ -446,14 +411,18 @@ class image_converter:
         if self.takeoffed and (not self.landed):
             self.line_detect(cv_image)
             cv_image = cv2.resize(cv_image, (720, 480))
+            ros_image = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
+            ros_image.header.stamp = data.header.stamp
+            self.ros_image_pub.publish(ros_image)
             cv2.imshow("Image window", cv_image)
             cv2.waitKey(1) & 0xFF
 
 
 def main(args):
     rospy.init_node('image_converter', anonymous=True)
+    # t0 = rospy.Time.now().to_sec()
     ic = image_converter()
-    # time.sleep(0.03)
+    # time.sleep(0.01)
     rospy.sleep(0.03)
     #ic.cam_down()
     try:
