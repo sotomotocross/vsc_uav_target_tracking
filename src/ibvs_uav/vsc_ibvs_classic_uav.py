@@ -250,6 +250,8 @@ class image_converter:
             (x_min, y_min), (w_min, h_min), angle = blackbox            
             box = cv2.boxPoints(blackbox)
             box = np.int0(box)
+            
+            print("box = ", box)
 
             # Sorting of the orientation of the detected coastline
             if angle < -45:
@@ -301,7 +303,7 @@ class image_converter:
             # print("Error pixel: ", er_pix)
             UVScmd = self.quadrotorVSControl(Lm, er_pix)
             UVScmd = np.dot(T, UVScmd)
-            print("UVScmd is: ", UVScmd)
+            # print("UVScmd is: ", UVScmd)
              
             self.uav_vel_body[0] = UVScmd[0]
             self.uav_vel_body[1] = UVScmd[1]

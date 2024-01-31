@@ -545,7 +545,7 @@ class image_converter:
             # pvs_msg.time = t_vsc
             # self.pub_pvs_data.publish(pvs_msg) 
 
-            # self.pub_vel.publish(twist)         
+            self.pub_vel.publish(twist)         
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)
