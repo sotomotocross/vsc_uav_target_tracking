@@ -17,6 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs  
   message_generation
+  img_seg_cnn
 )
 
 ## System dependencies are found with CMake's conventions
@@ -117,7 +118,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES coastline_tracking
-CATKIN_DEPENDS cv_bridge geometry_msgs roslib rospy sensor_msgs std_msgs message_runtime message_generation
+CATKIN_DEPENDS cv_bridge geometry_msgs roslib rospy sensor_msgs std_msgs message_runtime message_generation img_seg_cnn
 #  DEPENDS system_lib
 )
 
