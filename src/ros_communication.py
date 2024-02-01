@@ -16,7 +16,7 @@ from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
 from tf.transformations import euler_from_quaternion
 from nav_msgs.msg import Odometry
-from vsc_uav_target_tracking.msg import VSCdata, IBVSdata, EKFdata
+from vsc_uav_target_tracking.msg import VSCdata, IBVSdata, EKFdata, PVSdata
 
 class ROSCommunication:
     def __init__(self):
@@ -37,6 +37,8 @@ class ROSCommunication:
         self.pub_vsc_data = rospy.Publisher("/vsc_data", VSCdata, queue_size=1000)
         self.pub_ekf_data = rospy.Publisher("/ekf_data", EKFdata, queue_size=1000)
         self.pub_ibvs_data = rospy.Publisher("/ibvs_data", IBVSdata, queue_size=1000)
+        self.pub_pvs_data = rospy.Publisher("/pvs_data", PVSdata, queue_size=10)
+
         
         #Create subscribers
         self.imu_sub = rospy.Subscriber("/mavros/imu/data", Imu, self.update_imu)

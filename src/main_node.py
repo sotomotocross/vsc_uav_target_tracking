@@ -30,7 +30,8 @@ def detection_callback(data):
     box = np.array([box_1, box_2, box_3, box_4], dtype=int)
 
     visual_servoing_control = VisualServoingControl()
-    visual_servoing_control.detection_processing(box, angle)
+    visual_servoing_control.detection_processing(box, angle, cX, cY, sigma, sigma_square, sigma_square_log)
+    # visual_servoing_control.run_partitioned_visual_servoing()
 
 def main():
     """

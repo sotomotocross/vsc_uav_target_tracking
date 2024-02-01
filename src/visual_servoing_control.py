@@ -12,8 +12,9 @@ from numpy.linalg import norm
 from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
 import yaml
+from math import *
 
-from vsc_uav_target_tracking.msg import VSCdata, IBVSdata, EKFdata
+from vsc_uav_target_tracking.msg import VSCdata, IBVSdata, EKFdata, PVSdata
 from ros_communication import ROSCommunication
 from visual_servoing_utils import VisualServoingUtils
 from ekf_estimation import EKFEstimation
@@ -76,12 +77,15 @@ class VisualServoingControl:
         self.z = 1.0
         self.phi_imu = 0.0
         self.theta_imu = 0.0 
-        self.psi_imu = 0.0
-        self.w_imu = 0.0
+        self.psi = 0.0
         self.t = 0.0
-        self.dt = 0.03
-        self.a = 0.2
+        self.dt = 0.0335
+        self.a = 0.01
         self.time = rospy.Time.now().to_sec()
+        self.alpha_des = 0.0
+        self.sigma_des = 14850.0
+        # self.alpha = 10.0
+        self.sigma = 10.0
 
     # Function calling the feature transformation from the image plane on a virtual image plane
     def features_transformation(self, mp, phi, theta):
@@ -106,67 +110,6 @@ class VisualServoingControl:
         mpv = np.hstack((mpv0, mpv1, mpv2, mpv3))
         
         return mpv    
-    
-    # Function forming the image plane features and forming the interaction matrices for all the features
-    def calculate_interaction_matrix(self, mpv, mp_des, cu, cv, ax, ay):
-        """
-        Calculate the interaction matrix and image plane features.
-
-        Args:
-            mpv (numpy.ndarray): Transformed 3D points in the virtual image plane.
-            mp_des (numpy.ndarray): Desired image plane features.
-            cu (float): Image center x-coordinate.
-            cv (float): Image center y-coordinate.
-            ax (float): X focal length.
-            ay (float): Y focal length.
-
-        Returns:
-            Tuple[numpy.ndarray, numpy.ndarray]: Interaction matrix and error in image plane.
-        """
-        x_0 = (mpv[0]-cu)/ax
-        y_0 = (mpv[1]-cv)/ay
-        Z_0 = mpv[2]
-
-        x_1 = (mpv[3]-cu)/ax
-        y_1 = (mpv[4]-cv)/ay
-        Z_1 = mpv[5]
-        
-        x_2 = (mpv[6]-cu)/ax
-        y_2 = (mpv[7]-cv)/ay
-        Z_2 = mpv[8]
-            
-        x_3 = (mpv[9]-cu)/ax
-        y_3 = (mpv[10]-cv)/ay
-        Z_3 = mpv[11]
-
-        xd_0 = (mp_des[0]-cu)/ax
-        yd_0 = (mp_des[1]-cv)/ay
-        Zd_0 = mp_des[2]
-
-        xd_1 = (mp_des[3]-cu)/ax
-        yd_1 = (mp_des[4]-cv)/ay
-        Zd_1 = mp_des[5]
-
-        xd_2 = (mp_des[6]-cu)/ax
-        yd_2 = (mp_des[7]-cv)/ay
-        Zd_2 = mp_des[8]
-
-        xd_3 = (mp_des[9]-cu)/ax
-        yd_3 = (mp_des[10]-cv)/ay
-        Zd_3 = mp_des[11]
-                    
-        Lm0 = np.array([[-1.0/Z_0, 0.0, x_0/Z_0, x_0*y_0, -(1.0+x_0*x_0), y_0],
-                        [0.0, -1.0/Z_0, y_0/Z_0, 1.0+y_0*y_0, -x_0*y_0, -x_0]]).reshape(2,6)
-        Lm1 = np.array([[-1.0/Z_1, 0.0, x_1/Z_1, x_1*y_1, -(1.0+x_1*x_1), y_1],
-                        [0.0, -1.0/Z_1, y_1/Z_1, 1.0+y_1*y_1, -x_1*y_1, -x_1]]).reshape(2,6)
-        Lm2 = np.array([[-1.0/Z_2, 0.0, x_2/Z_2, x_2*y_2, -(1.0+x_2*x_2), y_2],
-                        [0.0, -1.0/Z_2, y_2/Z_2, 1.0+y_2*y_2, -x_2*y_2, -x_2]]).reshape(2,6)
-        Lm3 = np.array([[-1.0/Z_3, 0.0, x_3/Z_3, x_3*y_3, -(1.0+x_3*x_3), y_3],
-                        [0.0, -1.0/Z_3, y_3/Z_3, 1.0+y_3*y_3, -x_3*y_3, -x_3]]).reshape(2,6)
-        Lm = np.concatenate((Lm0, Lm1, Lm2, Lm3), axis=0)
-        er_pix = np.array([x_0-xd_0, y_0-yd_0, x_1-xd_1, y_1-yd_1, x_2-xd_2, y_2-yd_2, x_3-xd_3, y_3-yd_3 ]).reshape(8,1) #ax=ay=252.07
-        
-        return Lm, er_pix
     
     def cartesian_from_pixel(self, mp_pixel, cu, cv, ax, ay):
         """
@@ -232,38 +175,7 @@ class VisualServoingControl:
     
         return mp_pixel
 
-    def quadrotor_vs_control(self, Lm, er_pix, ew, vel_camera):
-        """
-        Perform Visual Servoing control for quadrotor.
-
-        Args:
-            Lm (numpy.ndarray): Interaction matrix.
-            er_pix (numpy.ndarray): Error in image plane.
-            ew (numpy.ndarray): Derivative error estimation.
-            vel_camera (numpy.ndarray): Velocity in the camera frame.
-
-        Returns:
-            numpy.ndarray: Control commands for the quadrotor.
-        """
-        Kc = np.identity(6)
-        Kc[0][0] = self.thrust_gain_Kc
-        Kc[1][1] = self.sway_gain_Kc
-        Kc[2][2] = self.forward_gain_Kc
-        Kc[3][3] = self.yaw_gain_Kc
-        Kc[4][4] = 0.0
-        Kc[5][5] = 0.0
-
-        Ke = np.identity(6)
-        Ke[0][0] = self.thrust_gain_Ke
-        Ke[1][1] = self.sway_gain_Ke
-        Ke[2][2] = self.forward_gain_Ke
-        Ke[3][3] = self.yaw_gain_Ke
-        Ke[4][4] = 0.0
-        Ke[5][5] = 0.0
-        
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
-        
-        return Ucmd
+    
     
     def get_feature_box(self, box, angle):
         """
@@ -317,6 +229,213 @@ class VisualServoingControl:
                              [-transCam[1], transCam[0], 0.0]]).reshape(3,3)        
         return R_y, sst
     
+    # Function forming the image plane features and forming the interaction matrices for all the features
+    def calculate_interaction_matrix(self, mpv, mp_des, cu, cv, ax, ay):
+        """
+        Calculate the interaction matrix and image plane features.
+
+        Args:
+            mpv (numpy.ndarray): Transformed 3D points in the virtual image plane.
+            mp_des (numpy.ndarray): Desired image plane features.
+            cu (float): Image center x-coordinate.
+            cv (float): Image center y-coordinate.
+            ax (float): X focal length.
+            ay (float): Y focal length.
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray]: Interaction matrix and error in image plane.
+        """
+        x_0 = (mpv[0]-cu)/ax
+        y_0 = (mpv[1]-cv)/ay
+        Z_0 = mpv[2]
+
+        x_1 = (mpv[3]-cu)/ax
+        y_1 = (mpv[4]-cv)/ay
+        Z_1 = mpv[5]
+        
+        x_2 = (mpv[6]-cu)/ax
+        y_2 = (mpv[7]-cv)/ay
+        Z_2 = mpv[8]
+            
+        x_3 = (mpv[9]-cu)/ax
+        y_3 = (mpv[10]-cv)/ay
+        Z_3 = mpv[11]
+
+        xd_0 = (mp_des[0]-cu)/ax
+        yd_0 = (mp_des[1]-cv)/ay
+        Zd_0 = mp_des[2]
+
+        xd_1 = (mp_des[3]-cu)/ax
+        yd_1 = (mp_des[4]-cv)/ay
+        Zd_1 = mp_des[5]
+
+        xd_2 = (mp_des[6]-cu)/ax
+        yd_2 = (mp_des[7]-cv)/ay
+        Zd_2 = mp_des[8]
+
+        xd_3 = (mp_des[9]-cu)/ax
+        yd_3 = (mp_des[10]-cv)/ay
+        Zd_3 = mp_des[11]
+                    
+        Lm0 = np.array([[-1.0/Z_0, 0.0, x_0/Z_0, x_0*y_0, -(1.0+x_0*x_0), y_0],
+                        [0.0, -1.0/Z_0, y_0/Z_0, 1.0+y_0*y_0, -x_0*y_0, -x_0]]).reshape(2,6)
+        Lm1 = np.array([[-1.0/Z_1, 0.0, x_1/Z_1, x_1*y_1, -(1.0+x_1*x_1), y_1],
+                        [0.0, -1.0/Z_1, y_1/Z_1, 1.0+y_1*y_1, -x_1*y_1, -x_1]]).reshape(2,6)
+        Lm2 = np.array([[-1.0/Z_2, 0.0, x_2/Z_2, x_2*y_2, -(1.0+x_2*x_2), y_2],
+                        [0.0, -1.0/Z_2, y_2/Z_2, 1.0+y_2*y_2, -x_2*y_2, -x_2]]).reshape(2,6)
+        Lm3 = np.array([[-1.0/Z_3, 0.0, x_3/Z_3, x_3*y_3, -(1.0+x_3*x_3), y_3],
+                        [0.0, -1.0/Z_3, y_3/Z_3, 1.0+y_3*y_3, -x_3*y_3, -x_3]]).reshape(2,6)
+        Lm = np.concatenate((Lm0, Lm1, Lm2, Lm3), axis=0)
+        er_pix = np.array([x_0-xd_0, y_0-yd_0, x_1-xd_1, y_1-yd_1, x_2-xd_2, y_2-yd_2, x_3-xd_3, y_3-yd_3 ]).reshape(8,1) #ax=ay=252.07
+        
+        return Lm, er_pix
+    
+    def quadrotor_vs_control(self, Lm, er_pix, ew, vel_camera):
+        """
+        Perform Visual Servoing control for quadrotor.
+
+        Args:
+            Lm (numpy.ndarray): Interaction matrix.
+            er_pix (numpy.ndarray): Error in image plane.
+            ew (numpy.ndarray): Derivative error estimation.
+            vel_camera (numpy.ndarray): Velocity in the camera frame.
+
+        Returns:
+            numpy.ndarray: Control commands for the quadrotor.
+        """
+        Kc = np.identity(6)
+        Kc[0][0] = self.thrust_gain_Kc
+        Kc[1][1] = self.sway_gain_Kc
+        Kc[2][2] = self.forward_gain_Kc
+        Kc[3][3] = self.yaw_gain_Kc
+        Kc[4][4] = 0.0
+        Kc[5][5] = 0.0
+
+        Ke = np.identity(6)
+        Ke[0][0] = self.thrust_gain_Ke
+        Ke[1][1] = self.sway_gain_Ke
+        Ke[2][2] = self.forward_gain_Ke
+        Ke[3][3] = self.yaw_gain_Ke
+        Ke[4][4] = 0.0
+        Ke[5][5] = 0.0
+        
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
+        
+        return Ucmd
+    
+    def calculate_partitioned_interaction_matrix(self, mpv, mp_des, cu, cv, ax, ay):
+        x_0 = (mpv[0]-cu)/ax
+        y_0 = (mpv[1]-cv)/ay
+        Z_0 = mpv[2]
+
+        x_1 = (mpv[3]-cu)/ax
+        y_1 = (mpv[4]-cv)/ay
+        Z_1 = mpv[5]
+        
+        x_2 = (mpv[6]-cu)/ax
+        y_2 = (mpv[7]-cv)/ay
+        Z_2 = mpv[8]
+            
+        x_3 = (mpv[9]-cu)/ax
+        y_3 = (mpv[10]-cv)/ay
+        Z_3 = mpv[11]
+
+        xd_0 = (mp_des[0]-cu)/ax
+        yd_0 = (mp_des[1]-cv)/ay
+        Zd_0 = mp_des[2]
+
+        xd_1 = (mp_des[3]-cu)/ax
+        yd_1 = (mp_des[4]-cv)/ay
+        Zd_1 = mp_des[5]
+
+        xd_2 = (mp_des[6]-cu)/ax
+        yd_2 = (mp_des[7]-cv)/ay
+        Zd_2 = mp_des[8]
+
+        xd_3 = (mp_des[9]-cu)/ax
+        yd_3 = (mp_des[10]-cv)/ay
+        Zd_3 = mp_des[11]
+        
+        L_xy0 = np.array([[-1.0/Z_0, 0.0,  x_0*y_0, -(1.0+x_0*x_0)],
+                        [0.0, -1.0/Z_0, 1.0+y_0*y_0, -x_0*y_0]]).reshape(2,4)
+        L_xy1 = np.array([[-1.0/Z_1, 0.0, x_1*y_1, -(1.0+x_1*x_1)],
+                        [0.0, -1.0/Z_1, 1.0+y_1*y_1, -x_1*y_1]]).reshape(2,4)
+        L_xy2 = np.array([[-1.0/Z_2, 0.0, x_2*y_2, -(1.0+x_2*x_2)],
+                        [0.0, -1.0/Z_2, 1.0+y_2*y_2, -x_2*y_2]]).reshape(2,4)
+        L_xy3 = np.array([[-1.0/Z_3, 0.0, x_3*y_3, -(1.0+x_3*x_3)],
+                        [0.0, -1.0/Z_3, 1.0+y_3*y_3, -x_3*y_3]]).reshape(2,4)
+        L_xy = np.concatenate((L_xy0, L_xy1, L_xy2, L_xy3), axis=0)
+        
+        
+        L_z0 = np.array([[x_0/Z_0, y_0],
+                        [y_0/Z_0, -x_0]]).reshape(2,2)
+        L_z1 = np.array([[x_1/Z_1, y_1],
+                        [y_1/Z_1, -x_1]]).reshape(2,2)
+        L_z2 = np.array([[x_2/Z_2, y_2],
+                        [y_2/Z_2, -x_2]]).reshape(2,2)
+        L_z3 = np.array([[x_2/Z_2, y_2],
+                        [y_2/Z_2, -x_2]]).reshape(2,2)
+        L_z = np.concatenate((L_z0, L_z1, L_z2, L_z3), axis=0)
+        
+        er_pix = np.array([x_0-xd_0, y_0-yd_0, x_1-xd_1, y_1-yd_1, x_2-xd_2, y_2-yd_2, x_3-xd_3, y_3-yd_3 ]).reshape(8,1) #ax=ay=252.07
+        
+        return L_xy, L_z, er_pix
+
+    def quadrotor_partitioned_vs_tracking(self, L_xy, L_z, er_pix, ew, sigma_des, sigma, angle, alpha_des):
+               
+        # ---- Tuning of PVS for tracking ----
+        control_gain = np.identity(4)
+        control_gain[0][0] = 1.0  # thrust gain
+        control_gain[1][1] = 1.0  # sway gain
+        control_gain[2][2] = 1.0  # yaw gain
+        control_gain[3][3] = 1.0  # 
+        
+        control_gain_est = np.identity(4)
+        control_gain_est[0][0] = 1.0  # thrust gain
+        control_gain_est[1][1] = 1.0  # sway gain
+        control_gain_est[2][2] = 1.0 # yaw gain
+        control_gain_est[3][3] = 1.0  # 
+        
+        control_gain_part = np.identity(4)
+        control_gain_part[0][0] = 1.0  # thrust gain
+        control_gain_part[1][1] = 1.0  # sway gain
+        control_gain_part[2][2] = 1.0  # yaw gain
+        control_gain_part[3][3] = 1.0  # 
+        
+        lvz = 1.0 # forward gain
+        l_om_z = 1.0  # angular z-axes velocity
+        # --------------------------------------        
+        
+        v_z = lvz*log(sigma_des/sigma)       
+        omega_z = l_om_z*(alpha_des - angle)   
+        np.linalg.pinv(L_xy)
+       
+        PVScmd_1 = -np.dot(control_gain,np.dot(np.linalg.pinv(L_xy), er_pix))
+        PVScmd_2 = np.dot(np.linalg.pinv(L_xy), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1))
+        PVScmd_3 = -np.dot(control_gain_est, np.dot(np.linalg.pinv(L_xy), ew))
+        PVScmd_4 = -np.dot(control_gain_part, np.dot(np.linalg.pinv(L_xy),np.dot(L_z,np.array([v_z, omega_z]).reshape(2,1))))
+        
+        PVScmd = PVScmd_1 + PVScmd_2 + PVScmd_3 + PVScmd_4
+       
+        # -----  Planning/Tracking -----
+        forward_gain_final = 2.0
+        thrust_gain_final = 0.0
+        sway_gain_final = 0.0002
+        yaw_gain_final = 0.0005
+        final_control_gain = np.identity(6)
+        final_control_gain[0][0] = thrust_gain_final
+        final_control_gain[1][1] = sway_gain_final
+        final_control_gain[2][2] = forward_gain_final
+        final_control_gain[3][3] = yaw_gain_final
+        final_control_gain[4][4] = 0.0
+        final_control_gain[5][5] = 0.0
+        # -------------------------------
+                        
+        PVScmd = np.array([PVScmd[0][0], PVScmd[1][0], v_z, PVScmd[2][0], PVScmd[3][0], omega_z]).reshape(6,1)
+        PVScmd = np.dot(final_control_gain, PVScmd)
+        
+        return PVScmd  
+    
     def control_execution(self, uav_vel_body):
         """
         Execute the control by publishing velocity commands.
@@ -347,9 +466,20 @@ class VisualServoingControl:
         ibvs_msg = IBVSdata()
         ibvs_msg.errors = er_pix
         ibvs_msg.cmds = uav_vel_body
-        # print("ibvs_msg.cmds: ", ibvs_msg.cmds)
         ibvs_msg.time = t_vsc
         self.ros_comms.pub_ibvs_data.publish(ibvs_msg)
+        
+    def create_pvs_message(self, er_pix, uav_vel_body, angle, alpha_des, sigma, sigma_des, t_vsc):
+        pvs_msg = PVSdata()
+        pvs_msg.errors = er_pix
+        pvs_msg.cmds = uav_vel_body
+        pvs_msg.alpha = angle
+        pvs_msg.alpha_des = alpha_des
+        pvs_msg.sigma = sigma
+        pvs_msg.sigma_des = sigma_des
+        pvs_msg.time = t_vsc
+        print("pvs_msg = ", pvs_msg)
+        self.ros_comms.pub_pvs_data.publish(pvs_msg)       
         
     def create_ekf_message(self, e_m, e_m_dot, u_bc, v_bc, t_vsc):
         """
@@ -371,9 +501,8 @@ class VisualServoingControl:
         ekf_msg.time = t_vsc
         self.ros_comms.pub_ekf_data.publish(ekf_msg)
     
-    
     # Detect the line and piloting
-    def detection_processing(self, box, angle):
+    def detection_processing(self, box, angle, cX, cY, sigma, sigma_square, sigma_square_log):
         """
         Process object detection and perform Visual Servoing Control.
 
@@ -394,7 +523,9 @@ class VisualServoingControl:
         R_y, sst = self.transform_body_to_camera(self.theta_cam, self.transCam)
         
         T = self.get_transformation_matrix(R_y, sst)
+        
         Lm, er_pix = self.calculate_interaction_matrix(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
+        L_xy, L_z, er_pix = self.calculate_partitioned_interaction_matrix(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
         
         u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
         v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
@@ -419,9 +550,21 @@ class VisualServoingControl:
         UVScmd = self.quadrotor_vs_control(Lm, er_pix, wave_estimation_final, velocity_camera)
         UVScmd = np.dot(T, UVScmd.reshape(-1, 1))
         
+        PVScmd = self.quadrotor_partitioned_vs_tracking(L_xy, L_z, er_pix, ew_filtered, self.sigma_des, sigma, angle, self.alpha_des)
+        # print("PVScmd = ", PVScmd)
+        PVScmd = np.dot(np.linalg.inv(T), PVScmd)
+        # print("transformed PVScmd = ", PVScmd)
+        self.er_pix_prev = er_pix
+        # print("er_pix_prev: ", self.er_pix_prev)    
+        
         # Make sure UVScmd is a NumPy array and its elements are scalars
-        UVScmd = np.asarray(UVScmd).reshape(-1)
+        UVScmd = np.asarray(UVScmd).reshape(-1)             
                              
+        # self.uav_vel_body[0] = PVScmd[0]
+        # self.uav_vel_body[1] = PVScmd[1]
+        # self.uav_vel_body[2] = PVScmd[2]
+        # self.uav_vel_body[3] = PVScmd[5]
+        
         self.uav_vel_body[0] = UVScmd[0]
         self.uav_vel_body[1] = UVScmd[1]
         self.uav_vel_body[2] = UVScmd[2]
@@ -429,8 +572,9 @@ class VisualServoingControl:
         
         self.control_execution(self.uav_vel_body)
         self.vsc_data_publishing(self.uav_vel_body, er_pix, t_vsc)
-        self.create_ekf_message(e_m, e_m_dot, u_bc, v_bc, t_vsc)        
-                        
+        self.create_ekf_message(e_m, e_m_dot, u_bc, v_bc, t_vsc)                        
+        self.create_pvs_message(er_pix, self.uav_vel_body, angle, self.alpha_des, sigma, self.sigma_des, t_vsc)     
+        
         self.ros_comms.publish_error(er_pix)
         self.ros_comms.publish_angle(angle)
             
