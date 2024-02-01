@@ -374,13 +374,17 @@ class image_converter:
         Ke[4][4] = 0.0
         Ke[5][5] = 0.0
         # --------------------------------------
-
+        
+        print("Ke = ", Ke)
+        print("Lm = ", Lm)
+        print("ew = ", ew)
+        print("np.dot(np.linalg.pinv(Lm), ew)) = ", np.dot(np.linalg.pinv(Lm), ew))
 
         Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
-        # print("1st control term: ", Kc*np.dot(np.linalg.pinv(Lm), er_pix))
-        # print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
-        # print("3rd control term: ", Ke*np.dot(np.linalg.pinv(Lm), ew))
-        # print ("Final control law calculation: ", Ucmd)
+        print("1st control term: ", Kc*np.dot(np.linalg.pinv(Lm), er_pix))
+        print("2nd control term: ", np.dot(np.linalg.pinv(Lm), np.array([0.0, 0.0, 0.0, 0.0, 0.0, self.a, 0.0, self.a]).reshape(8,1)))
+        print("3rd control term: ", Ke*np.dot(np.linalg.pinv(Lm), ew))
+        print ("Final control law calculation: ", Ucmd)
         
         # Ucmd = [0.0, 0.0, 0.0, 0.0, 0.1, 0.1]
         
@@ -478,22 +482,22 @@ class image_converter:
             # print("v of centroid: ", v_bc)
             
             ew = self.deriv_error_estimation(er_pix, self.er_pix_prev)
-            # print("ew: ", ew)
+            print("ew: ", ew)
             ew_filtered = self.moving_average_filter(np.array(ew).reshape(8,1))
-            # print("ew_filtered: ", ew_filtered)          
+            print("ew_filtered: ", ew_filtered)          
             ew_filtered_odometry = ew_filtered - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
 
             e_m = (er_pix[0]+er_pix[2]+er_pix[4]+er_pix[6])/4
-            # print("e_m: ", e_m)
+            print("e_m: ", e_m)
             e_m_dot = (ew_filtered_odometry[0]+ew_filtered_odometry[2]+ew_filtered_odometry[4]+ew_filtered_odometry[6])/4
-            # print("e_m_dot: ", e_m_dot)
+            print("e_m_dot: ", e_m_dot)
             self.ekf_estimation(e_m, e_m_dot)
-            # print("Extended kalman filter estimation: ", self.x_est)
+            print("Extended kalman filter estimation: ", self.x_est)
             # print("Extended kalman filter velocity estimation: ", wave_est[1])
             # wave_estimation_final = np.array([wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0], wave_est[1], [0.0]]).reshape(8,1)
             wave_est_control_input = self.x_est[1]
             wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8,1)
-            # print("final estimation: ", wave_estimation_final)
+            print("final estimation: ", wave_estimation_final)
             
             UVScmd = self.quadrotorVSControl_tracking(Lm, er_pix, wave_estimation_final)
             # UVScmd = np.dot(T, UVScmd)
@@ -533,7 +537,7 @@ class image_converter:
             ibvs_msg = IBVSdata()
             ibvs_msg.errors = er_pix
             ibvs_msg.cmds = self.uav_vel_body
-            print("ibvs_msg.cmds: ", ibvs_msg.cmds)
+            # print("ibvs_msg.cmds: ", ibvs_msg.cmds)
             ibvs_msg.time = t_vsc
             self.pub_ibvs_data.publish(ibvs_msg)
             
@@ -545,7 +549,7 @@ class image_converter:
             # pvs_msg.time = t_vsc
             # self.pub_pvs_data.publish(pvs_msg) 
 
-            self.pub_vel.publish(twist)         
+            # self.pub_vel.publish(twist)         
             
         ros_msg = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.pub_im.publish(ros_msg)

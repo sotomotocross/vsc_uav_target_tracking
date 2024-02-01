@@ -1,0 +1,10 @@
+<launch>
+  <!-- Launch your node -->
+  <node pkg="vsc_uav_target_tracking" type="main_node.py" name="main_node" output="screen">
+  </node>
+    <!-- Specify the path to the YAML file as a parameter -->
+    <param name="controller_gains_file" type="str" value="$(find vsc_uav_target_tracking)/config/controller_gains.yaml"/>
+
+    <!-- Pass controller options YAML file as a parameter -->
+    <param name="controller_options" type="string" value="$(find vsc_uav_target_tracking)/params/my_controller_params.yaml"/>  
+</launch>

@@ -1,0 +1,10 @@
+controller_gains:
+  forward_gain_Kc: 0.5
+  thrust_gain_Kc: 0.0
+  sway_gain_Kc: 0.35
+  yaw_gain_Kc: 1.6
+
+  forward_gain_Ke: 0.5
+  thrust_gain_Ke: 0.0
+  sway_gain_Ke: 0.35
+  yaw_gain_Ke: -2.0

@@ -11,20 +11,51 @@ from mavros_msgs.msg import PositionTarget
 from numpy.linalg import norm
 from math import cos, sin, tan, sqrt, exp, pi, atan2, acos, asin
 import tf
-from vsc_uav_target_tracking.msg import VSCdata
+import yaml
+
+from vsc_uav_target_tracking.msg import VSCdata, IBVSdata, EKFdata
 from ros_communication import ROSCommunication
+from visual_servoing_utils import VisualServoingUtils
+from ekf_estimation import EKFEstimation
+
 
 
 class VisualServoingControl:
     def __init__(self):
+        """
+        Initialize the VisualServoingControl class.
+
+        This method sets up the necessary components and parameters for visual servoing control.
+        """
         
         self.ros_comms = ROSCommunication()
+        self.visual_servoing_utils = VisualServoingUtils(dt=0.03, window_size=5)
+        self.ekf_estimator = EKFEstimation(dt=0.03)  # Pass the same dt to EKFEstimation
+        
+        # Fetch parameters dynamically
+        self.use_deriv_error_estimation = rospy.get_param("~use_deriv_error_estimation", True)
+        self.use_moving_average_filter = rospy.get_param("~use_moving_average_filter", True)
+        self.use_ekf_estimator = rospy.get_param("~use_ekf_estimator", True)
+
+        # Load gains from YAML file
+        gains_file_path = rospy.get_param("controller_gains_file", "")
+        with open(gains_file_path, 'r') as stream:
+            gains = yaml.safe_load(stream)["controller_gains"]
+
+        self.forward_gain_Kc = gains["forward_gain_Kc"]
+        self.thrust_gain_Kc = gains["thrust_gain_Kc"]
+        self.sway_gain_Kc = gains["sway_gain_Kc"]
+        self.yaw_gain_Kc = gains["yaw_gain_Kc"]
+
+        self.forward_gain_Ke = gains["forward_gain_Ke"]
+        self.thrust_gain_Ke = gains["thrust_gain_Ke"]
+        self.sway_gain_Ke = gains["sway_gain_Ke"]
+        self.yaw_gain_Ke = gains["yaw_gain_Ke"]
         
         # uav state variables
-        self.landed = 0
-        self.takeoffed = 1
         self.uav_vel_body = np.array([0.0, 0.0, 0.0, 0.0])
         self.er_pix_prev = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape(8,1)
+        self.vel_uav = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         # ZED stereo camera translation and rotation variables
         self.transCam = [0.0, 0.0, 0.14]
@@ -54,7 +85,17 @@ class VisualServoingControl:
 
     # Function calling the feature transformation from the image plane on a virtual image plane
     def features_transformation(self, mp, phi, theta):
-        
+        """
+        Perform feature transformation from the image plane to a virtual image plane.
+
+        Args:
+            mp (numpy.ndarray): 12-element array representing four 3D points in the image.
+            phi (float): Roll angle.
+            theta (float): Pitch angle.
+
+        Returns:
+            numpy.ndarray: Transformed 3D points in the virtual image plane.
+        """
         Rphi = np.array([[1.0, 0.0, 0.0],[0.0, cos(phi), -sin(phi)],[0.0, sin(phi), cos(phi)]]).reshape(3,3)
         Rtheta = np.array([[cos(theta), 0.0, sin(theta)],[0.0, 1.0, 0.0],[-sin(theta), 0.0, cos(theta)]]).reshape(3,3)
         Rft = np.dot(Rphi, Rtheta)
@@ -68,7 +109,20 @@ class VisualServoingControl:
     
     # Function forming the image plane features and forming the interaction matrices for all the features
     def calculate_interaction_matrix(self, mpv, mp_des, cu, cv, ax, ay):
-        
+        """
+        Calculate the interaction matrix and image plane features.
+
+        Args:
+            mpv (numpy.ndarray): Transformed 3D points in the virtual image plane.
+            mp_des (numpy.ndarray): Desired image plane features.
+            cu (float): Image center x-coordinate.
+            cv (float): Image center y-coordinate.
+            ax (float): X focal length.
+            ay (float): Y focal length.
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray]: Interaction matrix and error in image plane.
+        """
         x_0 = (mpv[0]-cu)/ax
         y_0 = (mpv[1]-cv)/ay
         Z_0 = mpv[2]
@@ -115,7 +169,19 @@ class VisualServoingControl:
         return Lm, er_pix
     
     def cartesian_from_pixel(self, mp_pixel, cu, cv, ax, ay):
-        
+        """
+        Convert pixel coordinates to Cartesian coordinates.
+
+        Args:
+            mp_pixel (numpy.ndarray): Image coordinates of 3D points.
+            cu (float): Image center x-coordinate.
+            cv (float): Image center y-coordinate.
+            ax (float): X focal length.
+            ay (float): Y focal length.
+
+        Returns:
+            numpy.ndarray: Cartesian coordinates of the 3D points.
+        """
         Z_0 = mp_pixel[2]
         X_0 = Z_0*((mp_pixel[0]-cu)/ax)
         Y_0 = Z_0*((mp_pixel[1]-cv)/ay)
@@ -137,7 +203,19 @@ class VisualServoingControl:
         return mp_cartesian
     
     def pixels_from_cartesian(self, mp_cartesian, cu, cv, ax, ay):
-    
+        """ 
+        Convert Cartesian coordinates to pixel coordinates.
+
+        Args:
+            mp_cartesian (numpy.ndarray): Cartesian coordinates of 3D points.
+            cu (float): Image center x-coordinate.
+            cv (float): Image center y-coordinate.
+            ax (float): X focal length.
+            ay (float): Y focal length.
+
+        Returns:
+            numpy.ndarray: Image coordinates of the 3D points.
+        """
         u_0 = (mp_cartesian[0]/mp_cartesian[2])*ax + cu
         v_0 = (mp_cartesian[1]/mp_cartesian[2])*ay + cv
         
@@ -154,57 +232,155 @@ class VisualServoingControl:
     
         return mp_pixel
 
-    def quadrotor_vs_control(self, Lm, er_pix):
-        
-        forward_gain_Kc = -2.2
-        thrust_gain_Kc = 0.0
-        sway_gain_Kc = 1.0
-        yaw_gain_Kc = -2.5
+    def quadrotor_vs_control(self, Lm, er_pix, ew, vel_camera):
+        """
+        Perform Visual Servoing control for quadrotor.
+
+        Args:
+            Lm (numpy.ndarray): Interaction matrix.
+            er_pix (numpy.ndarray): Error in image plane.
+            ew (numpy.ndarray): Derivative error estimation.
+            vel_camera (numpy.ndarray): Velocity in the camera frame.
+
+        Returns:
+            numpy.ndarray: Control commands for the quadrotor.
+        """
         Kc = np.identity(6)
-        Kc[0][0] = thrust_gain_Kc
-        Kc[1][1] = sway_gain_Kc
-        Kc[2][2] = forward_gain_Kc
-        Kc[3][3] = yaw_gain_Kc
+        Kc[0][0] = self.thrust_gain_Kc
+        Kc[1][1] = self.sway_gain_Kc
+        Kc[2][2] = self.forward_gain_Kc
+        Kc[3][3] = self.yaw_gain_Kc
         Kc[4][4] = 0.0
         Kc[5][5] = 0.0
 
-        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+1.0*np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1))
+        Ke = np.identity(6)
+        Ke[0][0] = self.thrust_gain_Ke
+        Ke[1][1] = self.sway_gain_Ke
+        Ke[2][2] = self.forward_gain_Ke
+        Ke[3][3] = self.yaw_gain_Ke
+        Ke[4][4] = 0.0
+        Ke[5][5] = 0.0
+        
+        Ucmd = -np.dot(Kc,np.dot(np.linalg.pinv(Lm), er_pix))+np.dot(np.linalg.pinv(Lm), np.array([0.0, self.a, 0.0, self.a, 0.0, self.a, 0.0, self.a]).reshape(8,1)) - np.dot(Ke, np.dot(np.linalg.pinv(Lm), ew) )
         
         return Ucmd
     
+    def get_feature_box(self, box, angle):
+        """
+        Get feature box for visual servoing based on detected box and angle.
+
+        Args:
+            box (List[List[float]]): Detected box coordinates.
+            angle (float): Angle of the detected box.
+
+        Returns:
+            List[float]: Feature box coordinates.
+        """
+        if angle >= 0:
+            return [box[0][0], box[0][1], self.z, box[1][0], box[1][1], self.z, box[2][0], box[2][1], self.z, box[3][0], box[3][1], self.z]
+        else:
+            return [box[3][0], box[3][1], self.z, box[0][0], box[0][1], self.z, box[1][0], box[1][1], self.z, box[2][0], box[2][1], self.z]
+
+    def get_transformation_matrix(self, R_y, sst):
+        """
+        Get the transformation matrix for the camera.
+
+        Args:
+            R_y (numpy.ndarray): Rotation matrix.
+            sst (numpy.ndarray): Transformation matrix.
+
+        Returns:
+            numpy.ndarray: Transformation matrix T.
+        """
+        T = np.zeros((6, 6), dtype=float)
+        T[0:3, 0:3] = R_y
+        T[3:6, 3:6] = R_y
+        T[0:3, 3:6] = np.dot(sst, R_y)
+        return T   
+    
     def transform_body_to_camera(self, theta_cam, transCam):
-        
-        R_y = np.array([[cos(self.theta_cam), 0.0, sin(self.theta_cam)],
+        """
+        Transform body coordinates to camera coordinates.
+
+        Args:
+            theta_cam (float): Camera pitch angle.
+            transCam (List[float]): Camera translation.
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray]: Rotation matrix R_y and transformation matrix sst.
+        """
+        R_y = np.array([[cos(theta_cam), 0.0, sin(theta_cam)],
                     [0.0, 1.0, 0.0],
-                    [-sin(self.theta_cam), 0.0, cos(self.theta_cam)]]).reshape(3,3)
-        sst = np.array([[0.0, -self.transCam[2], self.transCam[1]],
-                             [self.transCam[2], 0.0, -self.transCam[0]],
-                             [-self.transCam[1], self.transCam[0], 0.0]]).reshape(3,3)
-        
+                    [-sin(theta_cam), 0.0, cos(theta_cam)]]).reshape(3,3)
+        sst = np.array([[0.0, -transCam[2], transCam[1]],
+                             [transCam[2], 0.0, -transCam[0]],
+                             [-transCam[1], transCam[0], 0.0]]).reshape(3,3)        
         return R_y, sst
     
-    def control_execution(self, UVScmd, er_pix, t_vsc):
-        
+    def control_execution(self, uav_vel_body):
+        """
+        Execute the control by publishing velocity commands.
+
+        Args:
+            uav_vel_body (numpy.ndarray): Body velocity commands.
+        """
         twist = PositionTarget()
         #twist.header.stamp = 1
         twist.header.frame_id = 'world'
         twist.coordinate_frame = 8
         twist.type_mask = 1479
-        twist.velocity.x = self.uav_vel_body[0]
-        twist.velocity.y = self.uav_vel_body[1]
-        twist.velocity.z = self.uav_vel_body[2]
-        twist.yaw_rate = self.uav_vel_body[3]        
+        twist.velocity.x = uav_vel_body[0]
+        twist.velocity.y = uav_vel_body[1]
+        twist.velocity.z = uav_vel_body[2]
+        twist.yaw_rate = uav_vel_body[3]               
+        # self.ros_comms.pub_vel.publish(twist)    
+    
+    def vsc_data_publishing(self, uav_vel_body, er_pix, t_vsc):
+        """
+        Publish Visual Servoing Control data.
 
-        vsc_msg = VSCdata()
-        vsc_msg.errors = er_pix
-        vsc_msg.cmds = self.uav_vel_body
+        Args:
+            uav_vel_body (numpy.ndarray): Body velocity commands.
+            er_pix (numpy.ndarray): Error in image plane.
+            t_vsc (float): Time of Visual Servoing Control.
+        """
+        ibvs_msg = IBVSdata()
+        ibvs_msg.errors = er_pix
+        ibvs_msg.cmds = uav_vel_body
+        # print("ibvs_msg.cmds: ", ibvs_msg.cmds)
+        ibvs_msg.time = t_vsc
+        self.ros_comms.pub_ibvs_data.publish(ibvs_msg)
         
-        vsc_msg.time = t_vsc
-        self.ros_comms.pub_vsc_data.publish(vsc_msg)
-        # self.ros_comms.pub_vel.publish(twist)                     
+    def create_ekf_message(self, e_m, e_m_dot, u_bc, v_bc, t_vsc):
+        """
+        Create and publish Extended Kalman Filter (EKF) data message.
+
+        Args:
+            e_m (float): Mean error in image plane.
+            e_m_dot (float): Derivative of mean error.
+            u_bc (float): X-coordinate of the bounding box center.
+            v_bc (float): Y-coordinate of the bounding box center.
+            t_vsc (float): Time of Visual Servoing Control.
+        """
+        ekf_msg = EKFdata()
+        ekf_msg.ekf_output = self.ekf_estimator.x_est
+        ekf_msg.e_m = e_m
+        ekf_msg.e_m_dot = e_m_dot
+        ekf_msg.u_bc = u_bc
+        ekf_msg.v_bc = v_bc
+        ekf_msg.time = t_vsc
+        self.ros_comms.pub_ekf_data.publish(ekf_msg)
+    
     
     # Detect the line and piloting
     def detection_processing(self, box, angle):
+        """
+        Process object detection and perform Visual Servoing Control.
+
+        Args:
+            box (List[List[float]]): Detected box coordinates.
+            angle (float): Angle of the detected box.
+        """
         t_vsc = rospy.Time.now().to_sec() - self.time
         
         mp = self.get_feature_box(box, angle)
@@ -219,33 +395,43 @@ class VisualServoingControl:
         
         T = self.get_transformation_matrix(R_y, sst)
         Lm, er_pix = self.calculate_interaction_matrix(mp_pixel_v, mp_des, self.cu, self.cv, self.ax, self.ay) #TRANSFORM FEATURES
-        # print("Error pixel: ", er_pix)
-        UVScmd = self.quadrotor_vs_control(Lm, er_pix)
-        UVScmd = np.dot(T, UVScmd)
-        print("UVScmd is: ",  UVScmd)
-             
+        
+        u_bc = (box[0][0]+box[1][0]+box[2][0]+box[3][0])/4
+        v_bc = (box[0][1]+box[1][1]+box[2][1]+box[3][1])/4
+        
+        velocity_camera = np.dot(np.linalg.inv(T), self.ros_comms.vel_uav)  
+           
+        ew = None
+        if self.use_deriv_error_estimation:
+            ew = self.visual_servoing_utils.deriv_error_estimation(er_pix, self.er_pix_prev)
+        ew_filtered = None
+        if self.use_moving_average_filter:
+            ew_filtered = self.visual_servoing_utils.moving_average_filter(np.array(ew).reshape(8, 1))
+        ew_filtered_odometry = ew_filtered - np.array(np.dot(Lm, velocity_camera)).reshape(8,1)
+        wave_estimation_final = None
+        if self.use_ekf_estimator:
+            e_m = (er_pix[0] + er_pix[2] + er_pix[4] + er_pix[6]) / 4
+            e_m_dot = (ew_filtered_odometry[0] + ew_filtered_odometry[2] + ew_filtered_odometry[4] + ew_filtered_odometry[6]) / 4
+            wave_est_control_input = self.ekf_estimator.estimate(e_m, e_m_dot)
+            wave_estimation_final = np.array([wave_est_control_input, [self.a], wave_est_control_input, [self.a],
+                                         wave_est_control_input, [self.a], wave_est_control_input, [self.a]]).reshape(8, 1)
+        
+        UVScmd = self.quadrotor_vs_control(Lm, er_pix, wave_estimation_final, velocity_camera)
+        UVScmd = np.dot(T, UVScmd.reshape(-1, 1))
+        
+        # Make sure UVScmd is a NumPy array and its elements are scalars
+        UVScmd = np.asarray(UVScmd).reshape(-1)
+                             
         self.uav_vel_body[0] = UVScmd[0]
         self.uav_vel_body[1] = UVScmd[1]
         self.uav_vel_body[2] = UVScmd[2]
         self.uav_vel_body[3] = UVScmd[5]
         
-        self.control_execution(UVScmd, er_pix, t_vsc)
-        
+        self.control_execution(self.uav_vel_body)
+        self.vsc_data_publishing(self.uav_vel_body, er_pix, t_vsc)
+        self.create_ekf_message(e_m, e_m_dot, u_bc, v_bc, t_vsc)        
+                        
         self.ros_comms.publish_error(er_pix)
         self.ros_comms.publish_angle(angle)
             
-        self.t = self.t+self.dt
-    
-    
-    def get_feature_box(self, box, angle):
-        if angle >= 0:
-            return [box[0][0], box[0][1], self.z, box[1][0], box[1][1], self.z, box[2][0], box[2][1], self.z, box[3][0], box[3][1], self.z]
-        else:
-            return [box[3][0], box[3][1], self.z, box[0][0], box[0][1], self.z, box[1][0], box[1][1], self.z, box[2][0], box[2][1], self.z]
-
-    def get_transformation_matrix(self, R_y, sst):
-        T = np.zeros((6, 6), dtype=float)
-        T[0:3, 0:3] = R_y
-        T[3:6, 3:6] = R_y
-        T[0:3, 3:6] = np.dot(sst, R_y)
-        return T
+        self.t = self.t+self.dt    

@@ -5,17 +5,22 @@ The controllers were all developed in a UAV synthetic simulation environment: ht
 
 ## Classic IBVS method for target tracking
 We initially implemented a classical IBVS strategy for an underactuated UAV aiming target tracking which in our case is a constantly moving coastline in the presence of waves.
-```
-$ rosrun vsc_uav_target_tracking vsc_ibvs_classic_uav.py
-```
 All the various cases of IBVS for target tracking are attempts of estimating the wave motion (velocity) and incorporating it in the implemented controller.
 The basic controller of this attempt is an IBVS target tracking scheme incoporating an appropriately formulated EKF, based on the Gerstner wave models for the motion of the waves.
+The project is organized into the following files:
+
+- `main_node.py`: Orchestrates the entire system.
+- `ros_communication.py`: Handles ROS communication.
+- `visual_servoing.py`: Implements the core visual servoing logic.
+- `visual_servoing_utils.py`: Provides visual servoing utilities.
+- `controller_gains.yaml`: Specify controller gains in this YAML file.
+- `my_controller_params.yaml`: Specify boolean parameters of which of the various controller version you want to run.
 ```
-$ rosrun vsc_uav_target_tracking vsc_ibvs_tracking_ekf_est.py
+$ roslaunch vsc_uav_target_tracking my_controller.launch
 ```
 This is the core of [[1]](#1).
 
-## Partitioned Visual Servo Control strategy
+## Partitioned Visual Servo Control strategy (Deprecated - To be updated)
 This is a PVS implementation for the same application considering the decoupling between translational and rotational velocities.
 ```
 $ rosrun vsc_uav_target_tracking part_vs_track_ekf_est.py
@@ -26,7 +31,7 @@ $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
 This is the core of [[2]](#2).
 
-## Combination of Image moments with Visual Servoing
+## Combination of Image moments with Visual Servoing (Deprecated - To be updated)
 This in implementation of IBVS for target tracking utilizing [image moments](10.1109/TRO.2004.829463) as a statistical target descriptor.
 ```
 $ rosrun vsc_uav_target_tracking img_moments_ibvs.py
@@ -43,7 +48,6 @@ The controller was not developed on a synthetic environment. Due to the presence
 
 This is the core of diploma thesis [[3]](#3) and of paper [[4]](#4) that is accepted and will be presented on IROS 2023.
 
-
 ## References
 <a id="1">[1]</a> 
 S. N. Aspragkathos, G. C. Karras, and K. J. Kyriakopoulos, “A visual servoing strategy for coastline tracking using an unmanned aerial vehicle", in 2022 30th Mediterranean Conference on Control and
@@ -58,3 +62,4 @@ E. Ntouros, “Multicopter control using dynamic vision and neuromorphic computi
 
 <a id="4">[4]</a> 
 S. N. Aspragkathos, E. Ntouros, G. C. Karras, B. Linares-Barranco, T. Serrano-Gotarredona and K. J. Kyriakopoulos, “An Event-Based Tracking Control Framework for Multirotor Aerial Vehicles Using a Dynamic Vision Sensor and Neuromorphic Hardware", Accepted on IEEE/RSJ 2023 International Conference on Intelligent Robots and Systems (IROS), IEEE, 2023
+
