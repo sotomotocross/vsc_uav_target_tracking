@@ -31,10 +31,10 @@ $ rosrun vsc_uav_target_tracking part_vs_track_knet_est.py
 ```
 This is the core of [[2]](#2).
 
-## Combination of Image moments with Visual Servoing (Deprecated - To be updated)
+## Combination of Image moments with Visual Servoing 
 This in implementation of IBVS for target tracking utilizing [image moments](10.1109/TRO.2004.829463) as a statistical target descriptor.
 ```
-$ rosrun vsc_uav_target_tracking img_moments_ibvs.py
+$ rosrun vsc_uav_target_tracking vsc_uav_target_tracking_node
 ```
 
 ## Neuromorphic implementation of perception module and control implementation
