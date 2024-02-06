@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Controller.hpp"
-#include "FeatureData.hpp"
+#include "vsc_uav_target_tracking/Controller.hpp"
+#include "vsc_uav_target_tracking/FeatureData.hpp"
 
 #include <geometry_msgs/TwistStamped.h>
 #include "geometry_msgs/Twist.h"

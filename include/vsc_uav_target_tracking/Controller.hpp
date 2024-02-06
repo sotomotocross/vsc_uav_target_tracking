@@ -1,9 +1,9 @@
 #pragma once
 
 #include <ros/ros.h>
-#include "FeatureData.hpp"
-#include "VelocityTransformer.hpp"
-#include "DynamicsCalculator.hpp"
+#include "vsc_uav_target_tracking/FeatureData.hpp"
+#include "vsc_uav_target_tracking/VelocityTransformer.hpp"
+#include "vsc_uav_target_tracking/DynamicsCalculator.hpp"
 
 #include <geometry_msgs/TwistStamped.h>
 #include "geometry_msgs/Twist.h"
@@ -49,6 +49,12 @@ namespace vsc_uav_target_tracking
     void update();
 
   private:
+
+    // Declare boolean flags for synchronization
+    bool altitude_received;
+    bool custom_tf_features_received;
+    bool custom_features_received;
+    
     // ROS NodeHandles
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
@@ -62,13 +68,9 @@ namespace vsc_uav_target_tracking
     ros::Publisher vel_pub_;
     ros::Publisher state_vec_pub_;
     ros::Publisher state_vec_des_pub_;
-
     ros::Publisher cmd_vel_pub_;
     ros::Publisher img_moments_error_pub_;
-    ros::Publisher moments_pub_;
-    ros::Publisher central_moments_pub_;
 
-    // Feature data
     FeatureData feature_data_;
 
     // Declare a static instance of UtilityFunctions
@@ -77,27 +79,25 @@ namespace vsc_uav_target_tracking
     // Update loop thread
     std::thread control_loop_thread;
 
-    int dim_s;
-    int dim_inputs;
-
     // Eigen Vectors and Matrices
     Eigen::VectorXd state_vector;
     Eigen::VectorXd state_vector_des;
-    Eigen::VectorXd velocities;
     Eigen::VectorXd cmd_vel;
     Eigen::VectorXd error;
 
-    Eigen::MatrixXd gains;
     Eigen::VectorXd feature_vector;
     Eigen::VectorXd transformed_features;
     Eigen::VectorXd opencv_moments;
     Eigen::MatrixXd polygon_features;
     Eigen::MatrixXd transformed_polygon_features;
 
+    // Control gains
+    double gain_tx, gain_ty, gain_tz, gain_yaw;
+    
     // Control flags and variables
     int flag;
     double Tx, Ty, Tz, Oz;
-    double Z0, Z1, Z2, Z3;    
+    double Z0, Z1, Z2, Z3;       
 
     double l;
     double umax;
@@ -109,6 +109,8 @@ namespace vsc_uav_target_tracking
 
     double cX, cY;
     int cX_int, cY_int;
+    int dim_s;
+    int dim_inputs;
 
     double s_bar_x, s_bar_y;
     double first_min_index, second_min_index;

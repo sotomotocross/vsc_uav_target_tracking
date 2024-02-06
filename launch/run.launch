@@ -1,0 +1,5 @@
+<launch>
+    <node name="vsc_uav_target_tracking" pkg="vsc_uav_target_tracking" type="vsc_uav_target_tracking_node" output="screen">
+        <rosparam file="$(find vsc_uav_target_tracking)/config/img_moments_ibvs_controller_gains.yaml" />
+    </node>
+</launch>

@@ -82,7 +82,8 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 # Declare an executable
-add_executable(${PROJECT_NAME}_node
+add_executable(
+    ${PROJECT_NAME}_node
     src/roscpp_node/node.cpp
 )
 

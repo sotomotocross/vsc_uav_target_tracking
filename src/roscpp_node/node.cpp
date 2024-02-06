@@ -1,9 +1,9 @@
-#include "Controller.hpp"
+#include "vsc_uav_target_tracking/Controller.hpp"
 
 int main(int argc, char* argv[])
 {
   // Initialize ROS
-  ros::init(argc, argv, "vsc_uav_target_tracking");
+  ros::init(argc, argv, "vsc_uav_target_tracking"); 
 
   // Create a ROS node handle
   ros::NodeHandle nh;
